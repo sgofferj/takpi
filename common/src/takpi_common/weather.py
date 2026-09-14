@@ -375,6 +375,8 @@ class WeatherProvider:
         self._task: asyncio.Task[None] | None = None
         self._running = False
         self._unsub_loc: Any | None = None
+        self._last_fetch_ts: float = 0.0
+        self._fetch_debounce_s: float = 60.0
 
     async def start(self) -> None:
         if self._running:
@@ -406,16 +408,60 @@ class WeatherProvider:
         await self.stop()
 
     async def _on_location(self, evt: LocationUpdate) -> None:
+        prev = self._last_location
         self._last_location = evt
-        # Optionally trigger immediate fetch if not recently fetched?
-        # Let poll loop handle it; but if location moves significantly and in Finland, we could fetch sooner.
-        # For now just store; poll loop will check every interval or can be woken.
         logger.debug(
             "WeatherProvider got location %.5f,%.5f source=%s",
             evt.latitude,
             evt.longitude,
             evt.source,
         )
+        # Only trigger immediate fetch on config.yaml update (per spec), not on every GPS jitter
+        if evt.source != "config":
+            return
+        try:
+            should_trigger = False
+            if prev is None:
+                should_trigger = True
+            else:
+                # Config file edit – trigger even if small move (user explicitly edited file)
+                # Use same 10m jitter threshold as LocationProvider for config, but always trigger if file changed
+                dist = haversine_m(
+                    prev.latitude, prev.longitude, evt.latitude, evt.longitude
+                )
+                if dist > 10.0:
+                    should_trigger = True
+                elif prev.source != "config":
+                    # Previous was gpsd, now config → trigger
+                    should_trigger = True
+                else:
+                    # Same source config but location may have been edited to same coordinates? Still trigger if file mtime changed
+                    # We treat any new config LocationUpdate as trigger (distance may be 0 if user rewrote same coords)
+                    should_trigger = True
+            # Debounce: avoid rapid re-fetch if config edited multiple times quickly (<30s)
+            if should_trigger and (time.time() - self._last_fetch_ts < 30.0):
+                # Allow config trigger to debounce only if very rapid (<10s) and same location
+                if (
+                    prev is not None
+                    and haversine_m(
+                        prev.latitude, prev.longitude, evt.latitude, evt.longitude
+                    )
+                    < 10.0
+                    and (time.time() - self._last_fetch_ts < 10.0)
+                ):
+                    should_trigger = False
+            if should_trigger:
+                logger.info(
+                    "WeatherProvider: config location changed %.5f,%.5f → %.5f,%.5f, triggering immediate fetch",
+                    prev.latitude if prev else 0,
+                    prev.longitude if prev else 0,
+                    evt.latitude,
+                    evt.longitude,
+                )
+                if self._running:
+                    asyncio.create_task(self._maybe_fetch_and_publish())
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("WeatherProvider _on_location trigger check failed: %s", exc)
 
     async def _poll_loop(self) -> None:
         # Wait a bit for initial location to arrive
@@ -453,6 +499,7 @@ class WeatherProvider:
                 "WeatherProvider: location %.5f,%.5f not in Finland, skip", lat, lon
             )
             return
+        self._last_fetch_ts = time.time()
         # Check FMI reachability before heavy query
         reachable = await _is_fmi_reachable(timeout=self.reachability_timeout)
         if not reachable:

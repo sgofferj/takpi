@@ -559,7 +559,7 @@ class LocationProvider:
                             source="config",
                             accuracy=None,
                             gps_time=None,
-                            force=False,
+                            force=True,
                         )
             return
         if new_cfg.has_location():
@@ -573,7 +573,7 @@ class LocationProvider:
                 source="config",
                 accuracy=None,
                 gps_time=None,
-                force=False,
+                force=True,
             )
             logger.info(
                 "Location updated from config %s: %.5f,%.5f", new_cfg.path, lat, lon
