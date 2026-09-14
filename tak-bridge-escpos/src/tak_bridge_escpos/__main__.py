@@ -36,10 +36,12 @@ HEALTH_MAX_ERRORS: int = int(os.getenv("HEALTH_MAX_ERRORS", "3"))
 
 
 def _report(ok: bool) -> None:
+    """_report."""
     report_health(HEALTH_FILE, ok)
 
 
 def _printer_from_env() -> EscPosPrinter:
+    """_printer_from_env."""
     # Try central hardware config first (header pins → BCM, per spec)
     # Transparently falls back to env if not configured
     try:
@@ -102,6 +104,7 @@ def _printer_from_env() -> EscPosPrinter:
 
 
 async def _handle_print_request(printer: EscPosPrinter, req: PrintRequest) -> None:
+    """_handle_print_request."""
     try:
         await printer.handle_print_request(req)
         _report(True)
@@ -111,6 +114,7 @@ async def _handle_print_request(printer: EscPosPrinter, req: PrintRequest) -> No
 
 
 def _format_location(cot: object) -> str:
+    """_format_location."""
     lat = getattr(cot, "lat", None)
     lon = getattr(cot, "lon", None)
     if (
@@ -177,6 +181,7 @@ async def _handle_cot_print(bus: EventBus, printer: EscPosPrinter, cot: object) 
 
 
 async def main() -> None:  # pylint: disable=too-many-statements
+    """main."""
     load_dotenv()
     global HEALTH_FILE
     HEALTH_FILE = os.getenv("HEALTH_FILE", HEALTH_FILE)
@@ -213,6 +218,7 @@ async def main() -> None:  # pylint: disable=too-many-statements
 
     # Subscribe PrintRequest → printer (main → printer)
     async def on_print(req: PrintRequest) -> None:
+        """on_print."""
         await _handle_print_request(printer, req)
 
     bus.subscribe(PrintRequest, on_print)
@@ -254,6 +260,7 @@ async def main() -> None:  # pylint: disable=too-many-statements
             await cot_bus.start()
 
             async def on_cot(evt: CotReceived) -> None:  # type: ignore[no-untyped-def]
+                """on_cot."""
                 await _handle_cot_print(bus, printer, evt.cot)
 
             bus.subscribe(CotReceived, on_cot)
@@ -267,6 +274,7 @@ async def main() -> None:  # pylint: disable=too-many-statements
     stop_event = asyncio.Event()
 
     def _signal(*_: object) -> None:
+        """_signal."""
         stop_event.set()
 
     loop = asyncio.get_running_loop()

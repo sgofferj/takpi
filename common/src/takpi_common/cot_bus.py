@@ -68,6 +68,7 @@ class CotBus:
     """
 
     def __init__(self, bus: EventBus, stream: object) -> None:
+        """__init__."""
         self.bus = bus
         self.stream = stream  # takstream.CotStream
         self._recv_task: asyncio.Task[None] | None = None

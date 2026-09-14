@@ -33,6 +33,7 @@ class ButtonEvent:
 
     @property
     def released(self) -> bool:
+        """released."""
         return not self.pressed
 
 
@@ -87,6 +88,7 @@ class LedState:
 
 @dataclass(frozen=True)
 class ButtonConfig:
+    """ButtonConfig."""
     id: str
     device_addr: int  # MCP23017 address 0x20-0x27
     pin: int  # 0-15 (0-7=GPA, 8-15=GPB)
@@ -97,6 +99,7 @@ class ButtonConfig:
 
 @dataclass(frozen=True)
 class EncoderConfig:
+    """EncoderConfig."""
     id: str
     device_addr: int
     pin_a: int
@@ -109,6 +112,7 @@ class EncoderConfig:
 
 @dataclass(frozen=True)
 class LedConfig:
+    """LedConfig."""
     id: str
     device_addr: int
     pin: int
@@ -125,6 +129,7 @@ class ButtonState:
     """Debounced button tracking (owned by manager, not public API)."""
 
     def __init__(self, cfg: ButtonConfig) -> None:
+        """__init__."""
         self.cfg = cfg
         self.last_raw: bool | None = None
         self.last_stable: bool | None = None
@@ -206,6 +211,7 @@ class EncoderState:
     """Quadrature decoder for one encoder (polling)."""
 
     def __init__(self, cfg: EncoderConfig) -> None:
+        """__init__."""
         self.cfg = cfg
         self.position: int = cfg.initial_position
         self._prev_state: int | None = None
@@ -214,6 +220,7 @@ class EncoderState:
         )
 
     def _read_state(self, a_high: bool, b_high: bool) -> int:
+        """_read_state."""
         # Pullup active-low: high=1, low=0, but encoder outputs are also pullup
         # So we keep as is: high=1, low=0
         a = 1 if a_high else 0
@@ -221,6 +228,7 @@ class EncoderState:
         return (a << 1) | b  # A as high bit to match typical
 
     def update(self, a_high: bool, b_high: bool, now: float) -> EncoderEvent | None:
+        """update."""
         curr = self._read_state(a_high, b_high)
         if self._prev_state is None:
             self._prev_state = curr
@@ -246,6 +254,7 @@ class EncoderState:
 # Legacy simple helper for LED state mapping
 @dataclass
 class LedRuntime:
+    """LedRuntime."""
     cfg: LedConfig
     state: bool = False
 

@@ -290,6 +290,7 @@ async def main() -> None:
     stop_event: asyncio.Event = asyncio.Event()
 
     def _handle_signal(*_: object) -> None:
+        """_handle_signal."""
         logger.info("Signal received, shutting down…")
         stop_event.set()
 
