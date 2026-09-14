@@ -89,6 +89,7 @@ class LedState:
 @dataclass(frozen=True)
 class ButtonConfig:
     """ButtonConfig."""
+
     id: str
     device_addr: int  # MCP23017 address 0x20-0x27
     pin: int  # 0-15 (0-7=GPA, 8-15=GPB)
@@ -100,6 +101,7 @@ class ButtonConfig:
 @dataclass(frozen=True)
 class EncoderConfig:
     """EncoderConfig."""
+
     id: str
     device_addr: int
     pin_a: int
@@ -113,6 +115,7 @@ class EncoderConfig:
 @dataclass(frozen=True)
 class LedConfig:
     """LedConfig."""
+
     id: str
     device_addr: int
     pin: int
@@ -255,6 +258,7 @@ class EncoderState:
 @dataclass
 class LedRuntime:
     """LedRuntime."""
+
     cfg: LedConfig
     state: bool = False
 
