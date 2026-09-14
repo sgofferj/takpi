@@ -64,7 +64,8 @@ class CotBus:
 
         bus.subscribe(ButtonEvent, on_button)
 
-        # Hardware → LED control via bus (implicit: HardwareManager subscribes to LedCommand)
+        # Hardware → LED control via bus
+        # (HardwareManager subscribes to LedCommand)
     """
 
     def __init__(self, bus: EventBus, stream: object) -> None:
