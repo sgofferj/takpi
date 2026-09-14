@@ -669,10 +669,10 @@ def load_yaml_config(path: Path | None = None) -> TakpiConfig:
                 lon = float(lon)  # type: ignore[arg-type]
             if alt is not None:
                 alt = float(alt)  # type: ignore[arg-type]
-            if lat is not None and not (-90.0 <= lat <= 90.0):
+            if lat is not None and (-90.0 > lat or lat > 90.0):
                 logger.warning("Config %s location.latitude %s out of range", path, lat)
                 lat = None
-            if lon is not None and not (-180.0 <= lon <= 180.0):
+            if lon is not None and (-180.0 > lon or lon > 180.0):
                 logger.warning(
                     "Config %s location.longitude %s out of range", path, lon
                 )
@@ -802,7 +802,7 @@ class ConfigManager:
         await self.stop()
 
     async def _watch_loop(self) -> None:
-        import asyncio
+        import asyncio  # pylint: disable=import-outside-toplevel
 
         while self._running:
             try:
@@ -810,10 +810,13 @@ class ConfigManager:
                 new_cfg = self.check_and_reload()
                 if new_cfg and self.bus is not None:
                     try:
-                        from dataclasses import dataclass as _dc
 
-                        @_dc(frozen=True)
+                        @dataclass(
+                            frozen=True
+                        )  # pylint: disable=too-few-public-methods
                         class ConfigChanged:
+                            """Internal event for config reload."""
+
                             config: TakpiConfig
                             path: Path
 

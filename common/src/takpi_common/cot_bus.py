@@ -75,6 +75,7 @@ class CotBus:
         self._unsub_send: Any = None
 
     async def start(self) -> None:
+        """Start bridging – subscribe CotSend and start receive loop."""
         if self._running:
             return
         self._running = True
@@ -84,6 +85,7 @@ class CotBus:
         logger.info("CotBus started (bridge CotStream ↔ EventBus)")
 
     async def stop(self) -> None:
+        """Stop bridging and cancel receive loop."""
         self._running = False
         if self._unsub_send:
             self._unsub_send()
@@ -98,14 +100,16 @@ class CotBus:
         logger.info("CotBus stopped")
 
     async def __aenter__(self) -> CotBus:
+        """Enter async context."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
         await self.stop()
 
     async def _handle_send(self, evt: CotSend) -> None:
-        # Send via CotStream
+        """Handle outbound CotSend by sending via CotStream."""
         try:
             # stream.send is async
             await self.stream.send(evt.cot)  # type: ignore[attr-defined]
@@ -114,7 +118,7 @@ class CotBus:
             logger.exception("CotBus send failed: %s", exc)
 
     async def _recv_loop(self) -> None:
-        # Adapt to takstream CotStream async iterator or receive()
+        """Receive loop – publishes CotReceived for each inbound CoT."""
         stream = self.stream
         try:
             # Prefer async iterator if available
