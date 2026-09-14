@@ -25,7 +25,7 @@ Takpi's **common** library (`common/src/takpi_common`) provides:
 - **Location** (`location.py:1`) `LocationProvider` gpsd `127.0.0.1:2947` → `LocationUpdate` 10m jitter, speed-adaptive 1/5/10/30s else `config.yaml` fallback, `utc_to_local` via `zoneinfo`, `LocationCotBridge` SA `a-f-G-U-C`
 - **Weather** (`weather.py:1`) `WeatherProvider` Finland `±0.5/0.7` bbox via `requests`+`defusedxml`, nearest FMI station → `WeatherUpdate` + `ChronometerClient.gsa72_set_temp_c` (config-trigger only)
 - **ESC/POS printer** (`tak-bridge-escpos/`) – async driver `escpos.py:1` with **softserial GPIO** (`tx_pin`/`rx_pin` via `HEADER_TO_BCM` from `hardware.gpio` `escpos_tx`/`escpos_rx`, or `port`), `fat`/`print_alarm` 911 via `EventBus`/`CotBus`
-- **Wipe** (`wipe.py:1`) `WipeRegistry`/`WipeManager` – 10s hold `wipe`/`btn_wipe` on `EventBus` → secure overwrite (`certs`/`config` `tak`/`location`/cache/`journal`) + `poweroff`
+- **Wipe** (`wipe.py:1`) `WipeRegistry`/`WipeManager` – 10s hold `wipe`/`btn_wipe` (recommended header pin, e.g. `18: wipe` → BCM24, MCP fallback) → secure overwrite (`certs`/`config` `tak`/`location`/cache/`journal`) + `poweroff`
 
 All via `poetry` venvs, `black`/`mypy --strict`/`pylint` clean, `pytest` with `FakeSMBus`/`FakeSerial`/`AsyncMock` (no Pi, no TAK server).
 

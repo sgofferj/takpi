@@ -54,14 +54,18 @@ try:
     from takpi_common.location import LocationProvider
     from takpi_common.location_cot import LocationCotBridge
     from takpi_common.weather import WeatherProvider
+    from takpi_common.wipe import WipeManager
 
     _HAS_TAKPI_COMMON = True
+    _HAS_WIPE = True
 except ImportError:
     EventBus = None  # type: ignore[assignment,misc]
     LocationProvider = None  # type: ignore[assignment,misc]
     LocationCotBridge = None  # type: ignore[assignment,misc]
     WeatherProvider = None  # type: ignore[assignment,misc]
+    WipeManager = None  # type: ignore[assignment,misc]
     _HAS_TAKPI_COMMON = False
+    _HAS_WIPE = False
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +310,7 @@ async def main() -> None:
     # Setup EventBus + Location/Weather/COT providers (optional, via takpi_common)
     # ------------------------------------------------------------------
     bus = None
+    wipe_manager = None
     location_provider = None
     weather_provider = None
     cot_bus = None
@@ -314,6 +319,18 @@ async def main() -> None:
 
     if _HAS_TAKPI_COMMON and EventBus is not None:
         bus = EventBus()
+        # Wipe manager – 10s hold on header 18 (recommended) or MCP btn_wipe
+        wipe_manager = None
+        if _HAS_WIPE and WipeManager is not None:
+            try:
+                wipe_manager = WipeManager(bus, config_path=os.getenv("TAKPI_CONFIG"))
+                await wipe_manager.start()
+                logger.info("WipeManager started (header 18 recommended)")
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("WipeManager failed to start: %s", exc)
+                wipe_manager = None
+        else:
+            wipe_manager = None
         # Location provider (gpsd → config fallback)
         try:
             takpi_config_path = os.getenv("TAKPI_CONFIG")
@@ -514,6 +531,11 @@ async def main() -> None:
         if location_provider is not None:
             try:
                 await location_provider.stop()
+            except Exception:
+                pass
+        if wipe_manager is not None:
+            try:
+                await wipe_manager.stop()  # type: ignore[attr-defined]
             except Exception:
                 pass
 

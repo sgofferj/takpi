@@ -26,6 +26,15 @@ from takpi_common.mcp23017.manager import HardwareConfig, HardwareManager
 
 logger = logging.getLogger(__name__)
 
+# Wipe – optional, only if hardware has wipe button
+try:
+    from takpi_common.wipe import WipeManager  # type: ignore
+
+    _HAS_WIPE = True
+except ImportError:
+    WipeManager = None  # type: ignore
+    _HAS_WIPE = False
+
 
 @dataclass
 class CotConfig:
@@ -84,6 +93,7 @@ class TakPiApp:
         self.cot_cfg = cot_cfg
         self.hardware: HardwareManager | None = None
         self.cot_bus: CotBus | None = None
+        self.wipe: Any | None = None
         self._stream: Any | None = None
         self._subs: list[Any] = []
         self.takpi_config = takpi_config
@@ -123,6 +133,42 @@ class TakPiApp:
             )
             self.hardware = None
 
+        # Wipe manager – if wipe button configured (header 18 or mcp btn_wipe)
+        if _HAS_WIPE and WipeManager is not None:
+            try:
+                # Check if hardware has wipe button (gpio or mcp)
+                has_wipe = False
+                if self.takpi_config is not None:
+                    # Check via TakpiConfig hardware
+                    hw = getattr(self.takpi_config, "hardware", None)
+                    if hw is not None:
+                        for a in getattr(hw, "gpio", []):
+                            if getattr(a, "keyword", "") in ("wipe", "btn_wipe"):
+                                has_wipe = True
+                                break
+                        for a in getattr(hw, "mcp", []):
+                            if getattr(a, "keyword", "") in ("wipe", "btn_wipe"):
+                                has_wipe = True
+                                break
+                # Also check via hardware_cfg for fallback
+                if not has_wipe:
+                    for b in self.hardware_cfg.buttons:
+                        if b.id in ("wipe", "btn_wipe"):
+                            has_wipe = True
+                            break
+                if has_wipe:
+                    # Use takpi_config path if available
+                    cfg_path = (
+                        getattr(self.takpi_config, "path", None)
+                        if self.takpi_config
+                        else None
+                    )
+                    self.wipe = WipeManager(self.bus, config_path=cfg_path)
+                    await self.wipe.start()
+                    logger.info("WipeManager started (wipe button configured)")
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("WipeManager failed to start: %s", exc)
+
         # Subscribe hardware → main handlers
         self._subs.append(self.bus.subscribe(ButtonEvent, self._on_button))
         self._subs.append(self.bus.subscribe(EncoderEvent, self._on_encoder))
@@ -159,6 +205,12 @@ class TakPiApp:
         if self.hardware:
             await self.hardware.stop()
             self.hardware = None
+        if self.wipe:
+            try:
+                await self.wipe.stop()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            self.wipe = None
         logger.info("TakPiApp stopped")
 
     async def __aenter__(self) -> TakPiApp:

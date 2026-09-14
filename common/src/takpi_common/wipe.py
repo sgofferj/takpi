@@ -1,5 +1,9 @@
 """Wipe module – secure delete of sensitive data on long button press.
 
+Recommended: put the wipe button directly on a GPIO header pin (e.g. header
+18 → BCM24) for reliability – not via MCP23017. The manager handles both,
+but header is preferred (no I2C dependency, survives MCP failure).
+
 Registers sensitive paths/config keys via :class:`WipeRegistry`; on 10s
 continuous button press (`wipe`/`btn_wipe` on header/MCP) wipes:
 
@@ -47,6 +51,7 @@ from takpi_common.mcp23017.io import ButtonEvent
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Registry – modules register sensitive data
 # ---------------------------------------------------------------------------
@@ -69,7 +74,9 @@ class WipeRegistry:
     _global_config_keys: list[str] = []  # type: ignore
 
     @classmethod
-    def register_path(cls, path: str | Path, description: str = "", is_dir: bool | None = None) -> None:
+    def register_path(
+        cls, path: str | Path, description: str = "", is_dir: bool | None = None
+    ) -> None:
         """Register a sensitive file/dir to be wiped.
 
         Args:
@@ -92,7 +99,9 @@ class WipeRegistry:
         """Register a sensitive config key (dot-notation, e.g. ``tak.host``, ``location``)."""
         if key not in cls._global_config_keys:
             cls._global_config_keys.append(key)
-            logger.debug("WipeRegistry: registered config key %s (%s)", key, description)
+            logger.debug(
+                "WipeRegistry: registered config key %s (%s)", key, description
+            )
 
     @classmethod
     def get_paths(cls) -> list[SensitivePath]:
@@ -306,9 +315,16 @@ def _wipe_config_keys(config_path: Path, keys: list[str]) -> int:
                 for p in parent_parts[:-1]:
                     parent = parent.get(p, {})
                 key_to_check = parent_parts[-1]
-                if isinstance(parent, dict) and key_to_check in parent and isinstance(parent[key_to_check], dict) and not parent[key_to_check]:
+                if (
+                    isinstance(parent, dict)
+                    and key_to_check in parent
+                    and isinstance(parent[key_to_check], dict)
+                    and not parent[key_to_check]
+                ):
                     del parent[key_to_check]
-                    logger.debug("Removed empty config section %r", ".".join(parent_parts))
+                    logger.debug(
+                        "Removed empty config section %r", ".".join(parent_parts)
+                    )
 
     if removed > 0:
         # Overwrite file then write new content
@@ -317,7 +333,9 @@ def _wipe_config_keys(config_path: Path, keys: list[str]) -> int:
             _secure_overwrite_file(config_path)
             # Write new (may be empty)
             if data:
-                new_text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+                new_text = yaml.safe_dump(
+                    data, default_flow_style=False, sort_keys=False
+                )
                 config_path.write_text(new_text, encoding="utf-8")
             else:
                 # If all wiped, leave empty or minimal
@@ -335,16 +353,21 @@ def _wipe_config_keys(config_path: Path, keys: list[str]) -> int:
 class WipeManager:
     """Manages wipe on long button press (10s).
 
+    Recommended: put the wipe button on a GPIO header pin (e.g. header 18
+    → BCM24) for reliability – survives I2C/MCP failure. MCP fallback
+    (`btn_wipe` on `0x20: GPA0`) also works via ``ButtonEvent`` on ``EventBus``.
+
     Example::
 
         bus = EventBus()
         wipe = WipeManager(bus, poweroff_func=fake_poweroff)
         await wipe.start()
         # ButtonEvent on bus with id wipe/btn_wipe triggers wipe after 10s hold
+        # or direct GPIO header 18 monitoring if configured in ``hardware.gpio``
     """
 
     WIPE_HOLD_S = 10.0
-    BUTTON_IDS = ("wipe", "btn_wipe", "btn_wipe_10s")
+    BUTTON_IDS = ("wipe", "btn_wipe", "btn_wipe_10s", "wipe_button")
 
     def __init__(
         self,
@@ -357,7 +380,9 @@ class WipeManager:
         self.bus = bus
         from takpi_common.config_manager import get_default_config_path
 
-        self.config_path = Path(config_path).expanduser() if config_path else get_default_config_path()
+        self.config_path = (
+            Path(config_path).expanduser() if config_path else get_default_config_path()
+        )
         self.poweroff_func = poweroff_func or self._default_poweroff
         self.dry_run = dry_run
         self.wipe_journal = wipe_journal
@@ -365,14 +390,44 @@ class WipeManager:
         self._press_start: float | None = None
         self._unsub: Any | None = None
         self._running = False
+        self._gpio_task: asyncio.Task[None] | None = None
+        self._gpio_header_pin: int | None = None
+        self._gpio_bcm: int | None = None
 
     async def start(self) -> None:
-        """Start listening for wipe button."""
+        """Start listening for wipe button (MCP via EventBus + GPIO header poll)."""
         if self._running:
             return
         self._running = True
         self._unsub = self.bus.subscribe(ButtonEvent, self._on_button)
-        logger.info("WipeManager started (button %s, hold %.0fs, config %s)", self.BUTTON_IDS, self.WIPE_HOLD_S, self.config_path)
+        # Check for GPIO header wipe button in config (recommended)
+        try:
+            from takpi_common.config_manager import load_yaml_config, header_to_bcm
+
+            cfg = load_yaml_config(self.config_path)
+            # Look for gpio wipe pin
+            for a in cfg.hardware.gpio:
+                if a.keyword in self.BUTTON_IDS:
+                    self._gpio_header_pin = a.header_pin
+                    self._gpio_bcm = a.bcm
+                    logger.info(
+                        "WipeManager: found GPIO wipe on header %d (BCM %d)",
+                        a.header_pin,
+                        a.bcm,
+                    )
+                    # Start GPIO poll task (header pin, preferred)
+                    self._gpio_task = asyncio.create_task(
+                        self._gpio_poll_loop(a.header_pin, a.bcm)
+                    )
+                    break
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("WipeManager GPIO check failed: %s", exc)
+        logger.info(
+            "WipeManager started (button %s, hold %.0fs, config %s)",
+            self.BUTTON_IDS,
+            self.WIPE_HOLD_S,
+            self.config_path,
+        )
 
     async def stop(self) -> None:
         """Stop listening and cancel hold timer."""
@@ -387,6 +442,13 @@ class WipeManager:
             except asyncio.CancelledError:
                 pass
             self._press_task = None
+        if self._gpio_task:
+            self._gpio_task.cancel()
+            try:
+                await self._gpio_task
+            except asyncio.CancelledError:
+                pass
+            self._gpio_task = None
 
     async def __aenter__(self) -> WipeManager:
         await self.start()
@@ -403,7 +465,9 @@ class WipeManager:
             if self._press_task and not self._press_task.done():
                 return  # already timing
             self._press_start = time.monotonic()
-            logger.info("Wipe button %s pressed, hold %.0fs to wipe", evt.id, self.WIPE_HOLD_S)
+            logger.info(
+                "Wipe button %s pressed, hold %.0fs to wipe", evt.id, self.WIPE_HOLD_S
+            )
             self._press_task = asyncio.create_task(self._hold_and_wipe(evt.id))
         else:
             # Button released – cancel if hold not yet completed
@@ -414,14 +478,94 @@ class WipeManager:
                     await self._press_task
                 except asyncio.CancelledError:
                     pass
-                logger.info("Wipe button %s released after %.1fs – cancel wipe", evt.id, elapsed)
+                logger.info(
+                    "Wipe button %s released after %.1fs – cancel wipe", evt.id, elapsed
+                )
             self._press_start = None
             self._press_task = None
+
+    async def _gpio_poll_loop(self, header_pin: int, bcm: int) -> None:
+        """Poll GPIO header pin for wipe (active-low, pullup). Preferred over MCP."""
+        # Try RPi.GPIO, else gpiozero, else sysfs fallback
+        use_rpi = False
+        use_gpiozero = False
+        try:
+            import RPi.GPIO as GPIO  # type: ignore
+
+            GPIO.setmode(GPIO.BOARD)
+            GPIO.setup(header_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+            use_rpi = True
+            logger.info(
+                "WipeManager: GPIO header %d monitoring via RPi.GPIO", header_pin
+            )
+        except (ImportError, RuntimeError, OSError):
+            try:
+                from gpiozero import Button as GpioZeroButton  # type: ignore
+
+                use_gpiozero = True
+                logger.info(
+                    "WipeManager: GPIO header %d monitoring via gpiozero", header_pin
+                )
+            except (ImportError, OSError):
+                logger.warning(
+                    "WipeManager: no RPi.GPIO/gpiozero, GPIO wipe poll disabled for header %d",
+                    header_pin,
+                )
+                return
+
+        # Simple poll loop – publish ButtonEvent for wipe
+        pressed = False
+        while self._running:
+            try:
+                if use_rpi:
+                    # RPi.GPIO BOARD mode: header pin number directly
+                    import RPi.GPIO as GPIO  # type: ignore
+
+                    level = GPIO.input(header_pin)
+                    # Active-low: 0 = pressed
+                    is_pressed = level == 0
+                elif use_gpiozero:
+                    from gpiozero import Button as GpioZeroButton  # type: ignore
+
+                    # gpiozero uses BCM by default, need to create button each loop? Simpler poll via value
+                    # For now, fallback to sysfs
+                    is_pressed = False
+                else:
+                    is_pressed = False
+
+                # Fallback sysfs if needed
+                if not use_rpi and not use_gpiozero:
+                    # Try /sys/class/gpio
+                    try:
+                        val = (
+                            Path(f"/sys/class/gpio/gpio{bcm}/value").read_text().strip()
+                        )
+                        is_pressed = val == "0"
+                    except (OSError, FileNotFoundError):
+                        is_pressed = False
+
+                if is_pressed != pressed:
+                    pressed = is_pressed
+                    # Publish ButtonEvent for wipe
+                    evt = ButtonEvent(
+                        id="wipe", device_addr=0, pin=header_pin, pressed=pressed
+                    )
+                    await self.bus.publish(evt)
+                    # Also directly handle for immediate hold logic (in case no other handler)
+                    await self._on_button(evt)
+                await asyncio.sleep(0.05)  # 20Hz poll
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.debug("GPIO wipe poll error header %d: %s", header_pin, exc)
+                await asyncio.sleep(1.0)
 
     async def _hold_and_wipe(self, button_id: str) -> None:
         try:
             await asyncio.sleep(self.WIPE_HOLD_S)
-            logger.warning("Wipe button %s held for %.0fs – wiping!", button_id, self.WIPE_HOLD_S)
+            logger.warning(
+                "Wipe button %s held for %.0fs – wiping!", button_id, self.WIPE_HOLD_S
+            )
             await self._execute_wipe()
         except asyncio.CancelledError:
             raise
@@ -448,14 +592,25 @@ class WipeManager:
             pat = sp.path
             # Use _wipe_path which handles globs and absolute/relative
             # Try base dir as takpi common and cwd and home
-            for base in [Path.cwd(), Path.home(), Path.home() / "takpi", Path("/home/sgofferj/takpi"), Path("/home/pi/takpi")]:
+            for base in [
+                Path.cwd(),
+                Path.home(),
+                Path.home() / "takpi",
+                Path("/home/sgofferj/takpi"),
+                Path("/home/pi/takpi"),
+            ]:
                 # _wipe_path already searches multiple bases, so just call once with cwd
                 pass
             count = _wipe_path(pat, base_dir=Path.cwd())
             total_files += count
             # Also try absolute home takpi
             if not pat.is_absolute():
-                for base in [Path.home() / "takpi", Path("/home/sgofferj/takpi"), Path("/home/pi/takpi"), Path("/home/sgofferj/Dev/TAK/takpi")]:
+                for base in [
+                    Path.home() / "takpi",
+                    Path("/home/sgofferj/takpi"),
+                    Path("/home/pi/takpi"),
+                    Path("/home/sgofferj/Dev/TAK/takpi"),
+                ]:
                     count2 = _wipe_path(pat, base_dir=base)
                     total_files += count2
 
@@ -471,7 +626,11 @@ class WipeManager:
         ]
         for p in our_caches:
             # Search in common locations
-            for base in [Path.cwd(), Path.home() / "takpi", Path("/home/sgofferj/Dev/TAK/takpi")]:
+            for base in [
+                Path.cwd(),
+                Path.home() / "takpi",
+                Path("/home/sgofferj/Dev/TAK/takpi"),
+            ]:
                 target = base / p if not p.is_absolute() else p
                 if target.exists():
                     if target.is_dir():
@@ -490,7 +649,9 @@ class WipeManager:
         # Also wipe registered config keys from central config
         keys = WipeRegistry.get_config_keys()
         wiped_keys = _wipe_config_keys(self.config_path, keys)
-        logger.info("WIPE wiped %d files/dirs and %d config keys", total_files, wiped_keys)
+        logger.info(
+            "WIPE wiped %d files/dirs and %d config keys", total_files, wiped_keys
+        )
 
         # 2. Wipe journal if requested
         if self.wipe_journal:
@@ -506,7 +667,9 @@ class WipeManager:
             logger.exception("Poweroff failed: %s", exc)
             # Fallback try direct
             try:
-                subprocess.run(["sudo", "poweroff"], check=False, timeout=5)  # nosec B603,B607
+                subprocess.run(
+                    ["sudo", "poweroff"], check=False, timeout=5
+                )  # nosec B603,B607
             except Exception:
                 pass
 
@@ -517,7 +680,9 @@ class WipeManager:
             for cmd in [["journalctl", "--rotate"], ["journalctl", "--vacuum-time=1s"]]:
                 try:
                     proc = await asyncio.create_subprocess_exec(
-                        *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
+                        *cmd,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
                     )
                     try:
                         await asyncio.wait_for(proc.wait(), timeout=5.0)
@@ -537,10 +702,14 @@ class WipeManager:
         """Default poweroff – immediate."""
         logger.warning("Executing poweroff")
         try:
-            subprocess.run(["sudo", "poweroff"], check=False, timeout=5)  # nosec B603,B607
+            subprocess.run(
+                ["sudo", "poweroff"], check=False, timeout=5
+            )  # nosec B603,B607
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("poweroff failed: %s", exc)
             try:
-                subprocess.run(["sudo", "systemctl", "poweroff"], check=False, timeout=5)  # nosec B603,B607
+                subprocess.run(
+                    ["sudo", "systemctl", "poweroff"], check=False, timeout=5
+                )  # nosec B603,B607
             except Exception:
                 pass

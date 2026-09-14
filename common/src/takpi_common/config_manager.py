@@ -277,7 +277,10 @@ register_hardware_keyword(
 register_hardware_keyword(
     "wipe",
     HardwareSpec(
-        buses=("gpio", "mcp"), type="button", module="common", description="wipe button"
+        buses=("gpio", "mcp"),
+        type="button",
+        module="common",
+        description="wipe button – recommended on GPIO header (e.g. 18) for reliability, MCP fallback",
     ),
 )
 register_hardware_keyword(
