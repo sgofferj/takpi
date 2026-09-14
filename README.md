@@ -8,20 +8,23 @@ Each sub-directory is an **independent** Python project (own `pyproject.toml`, `
 
 | Bridge | Hardware | Interface | Status | Path |
 |---|---|---|---|---|
-| tak-bridge-chronometer | Flight Illusion GSA-72 Chronometer (Davtron) | Serial 38400 baud (`/dev/serial0` on GPIO14 TXD / GPIO15 RXD, 3.3V TTL) | ✅ Beta – library + hourly sync service | `tak-bridge-chronometer/` |
-| tak-bridge-escpos | ESC/POS Thermal Printer (TTL) | Softserial BCM `tx_pin`/`rx_pin` @9600-115200 via `pigpio` **or** hardware `port` `/dev/serial0`/`/dev/ttyUSB0` | ✅ Implemented – async driver (fat/double, `print_alarm` 911) + `PrintRequest`/`CotReceived`→print via `EventBus` | `tak-bridge-escpos/` |
+| tak-bridge-chronometer | Flight Illusion GSA-72 Chronometer (Davtron) | Serial 38400 baud (`/dev/serial0` GPIO14 TXD header 8 / GPIO15 RXD header 10, 3.3V TTL) + `hardware` `8: gauge_tx` | ✅ Implemented – library + hourly sync + GPS time (`LocationProvider`) + FMI temp → chrono | `tak-bridge-chronometer/` |
+| tak-bridge-escpos | ESC/POS Thermal Printer (TTL) | Softserial header `13: escpos_tx` → BCM27 / `15: escpos_rx` via `pigpio` **or** hardware `port` `/dev/serial0`/`/dev/ttyUSB0` | ✅ Implemented – async driver (fat/double, `print_alarm` 911) + `PrintRequest`/`CotReceived`→print via `EventBus`/`CotBus` (header → BCM via `config_manager`) | `tak-bridge-escpos/` |
 
 See `AGENTS.md:90` for agent coordination and `tak-bridge-chronometer/README.md` for wiring/env.
 
 ## Shared Framework (`common/` + `python-tak-cot-streaming`) + ESC/POS Bridge
 
-Takpi's new **MCP23017 daisy-chain framework** lives in `common/` (shared `takpi_common` library). It provides:
+Takpi's **common** library (`common/src/takpi_common`) provides:
 - **MCP23017 driver** (`driver.py:1`) for 0x20-0x27 on I2C-1, `FakeSMBus` for CI, interrupt support
-- **Buttons/encoders/LEDs** (`io.py:1`) with debounce/quadrature/blink, daisy-chained `HardwareManager` (`manager.py:1`, 5 ms poll, 200 Hz)
-- **EventBus** (`bus.py:1`) bidirectional: buttons/encoders → main, main → LEDs
+- **Buttons/encoders/LEDs** (`io.py:1`) with debounce/quadrature/blink, daisy-chained `HardwareManager` (`manager.py:1`, 5 ms poll, 200 Hz, `from_takpi_config` via YAML)
+- **EventBus** (`bus.py:1`) bidirectional: buttons/encoders → main, main → LEDs, plus `LocationUpdate`/`WeatherUpdate`
 - **CotBus** (`cot_bus.py:1`) bridging `takstream.CotStream` (from submodule `python-tak-cot-streaming`, **not pytak**) ↔ EventBus → `CotReceived`/`CotSend`
-- **TakPiApp** (`app.py:1`) example main wiring button→CoT and CoT→LED
-- **ESC/POS printer** (`tak-bridge-escpos/`) – async driver `escpos.py:1` with **softserial GPIO** (`tx_pin`/`rx_pin` BCM via `pigpio` bit-bang, configurable `baudrate` 9600-115200) or hardware `port`, convenience **fat**/double-height/width, `PrintRequest` on `EventBus`, **911 alarm** `print_alarm` via `CotReceived` (takstream)
+- **TakPiApp** (`app.py:1`) example main wiring button→CoT and CoT→LED, `from_config_file` via `~/takpi/config.yaml`
+- **Central Config** (`config_manager.py:1`) `~/takpi/config.yaml` (`TAKPI_CONFIG` override) with `HEADER_TO_BCM` (1..40 → BCM), `location` + `hardware` (`gpio` header → keyword, `mcp23017` `0x20: GPA0: btn_wipe`), `register_hardware_keyword` validation, `TakpiConfig` polled via `mtime`
+- **Location** (`location.py:1`) `LocationProvider` gpsd `127.0.0.1:2947` → `LocationUpdate` 10m jitter, speed-adaptive 1/5/10/30s else `config.yaml` fallback, `utc_to_local` via `zoneinfo`, `LocationCotBridge` SA `a-f-G-U-C`
+- **Weather** (`weather.py:1`) `WeatherProvider` Finland `±0.5/0.7` bbox via `requests`+`defusedxml`, nearest FMI station → `WeatherUpdate` + `ChronometerClient.gsa72_set_temp_c` (config-trigger only)
+- **ESC/POS printer** (`tak-bridge-escpos/`) – async driver `escpos.py:1` with **softserial GPIO** (`tx_pin`/`rx_pin` via `HEADER_TO_BCM` from `hardware.gpio` `escpos_tx`/`escpos_rx`, or `port`), `fat`/`print_alarm` 911 via `EventBus`/`CotBus`
 
 All via venv `poetry` (per `AGENTS.md:48`), `black`/`mypy --strict`/`pylint` clean, `pytest` with `FakeSMBus`/`FakeSerial`/`AsyncMock` (no Pi, no TAK server).
 
@@ -73,10 +76,11 @@ poetry run --directory tak-bridge-chronometer pytest -v
 
 ```
 takpi/
-  AGENTS.md                         # coordination (now mentions takstream, MCP23017, escpos softserial)
+  AGENTS.md                         # coordination (now mentions takstream, MCP23017, escpos softserial, location/weather)
   README.md                         # this file (index of 11 README_<topic>.md)
   README_chronometer.md             # thorough top-level chronometer doc (README_<topic>.md #1)
   README_escpos.md                  # thorough top-level escpos doc (README_<topic>.md #9, softserial GPIO + 911)
+  config.example.yaml               # central config example (location + hardware gpio/mcp, header 1..40)
   python-tak-cot-streaming/         # git submodule ../python-tak-cot-streaming (takstream, not pytak)
     src/takstream/                  # cot.py (CotEvent), stream.py (CotStream), __init__.py
   common/
@@ -84,17 +88,21 @@ takpi/
     README_bus.md                   # EventBus bidirectional (README_<topic>.md #5)
     README_cot.md                   # CotStream/takstream via CotBus (README_<topic>.md #6)
     README_app.md                   # TakPiApp main wiring (README_<topic>.md #7)
-    pyproject.toml                  # takpi-common + path dep python-tak-cot-streaming develop
+    pyproject.toml                  # takpi-common + path dep python-tak-cot-streaming develop + pyyaml/requests/defusedxml/tzdata
     src/takpi_common/
       __init__.py
       bus.py                        # EventBus
       config.py / health.py
-      app.py                        # TakPiApp + CotConfig
+      config_manager.py             # ConfigManager, HEADER_TO_BCM, register_hardware_keyword, TakpiConfig (YAML, hardware)
+      app.py                        # TakPiApp + CotConfig (from_takpi_config)
       cot_bus.py                    # CotBus (CotReceived/CotSend)
+      location.py                   # LocationProvider, LocationUpdate (gpsd→config, jitter, speed, gps_time, utc_to_local)
+      location_cot.py               # LocationCotBridge (LocationUpdate→CotSend SA)
+      weather.py                    # WeatherProvider, WeatherUpdate (Finland + FMI, config-trigger)
       mcp23017/
         driver.py                   # MCP23017 + FakeSMBus
         io.py                       # Button/Encoder/Led configs & events
-        manager.py                  # HardwareManager (poll 5ms, daisy-chain)
+        manager.py                  # HardwareManager (poll 5ms, daisy-chain, from_takpi_config)
     examples/
       panel_demo.py                 # fake hardware + fake CoT demo (no Pi, no TAK)
     tests/
@@ -103,15 +111,15 @@ takpi/
     README.md                       # bridge overview (with submodule index)
     README_chronometer.md           # library submodule doc (README_<topic>.md #2)
     README_main.md                  # service submodule doc (README_<topic>.md #3)
-    pyproject.toml
+    pyproject.toml                  # deps pyserial/takpi-common + pyyaml/requests/defusedxml/tzdata
     src/tak_bridge_chronometer/
       __init__.py
       chronometer.py                # library – port of ArduIllusion.cpp:161 Chrono (GPIO UART)
-      __main__.py                   # async hourly sync (local + UTC) – sync_once @52
+      __main__.py                   # async hourly sync + LocationProvider/WeatherProvider/CotBus (GPS time)
     tests/
       test_chronometer.py
     systemd/
-      tak-bridge-chronometer.service  # GPIO UART /dev/serial0
+      tak-bridge-chronometer.service  # GPIO UART /dev/serial0, venv ~/takpi/tak-bridge-chronometer/.venv
   tak-bridge-escpos/
     README.md                       # bridge overview (index of 2 submodules)
     README_escpos.md                # driver deep dive (softserial BCM tx_pin/rx_pin + baudrate, ESC/POS fat)
@@ -120,7 +128,7 @@ takpi/
     src/tak_bridge_escpos/
       __init__.py                   # re-exports EscPosPrinter, PrintRequest
       escpos.py                     # driver (FakeSerial/SoftSerial/HardwareSerial, fat/print_alarm, handle_print_request)
-      __main__.py                   # service (EventBus PrintRequest/CotReceived→print, softserial vs port, health)
+      __main__.py                   # service (EventBus PrintRequest/CotReceived→print, hardware.gpio escpos_tx/rx via HEADER_TO_BCM)
     tests/
       test_escpos.py                # 9 tests (FakeSerial, fat, alarm, PrintRequest via bus, Cot→print)
     systemd/
@@ -131,5 +139,5 @@ takpi/
 
 - Python 3.12+, Poetry, `black`/`mypy --strict`/`pylint`, `pytest`+`pytest-asyncio`
 - Health files: `/tmp/tak-<bridge>-healthy`
-- Env via `python-dotenv`, `.env` per bridge (not committed)
+- Central config `~/takpi/config.yaml` (`TAKPI_CONFIG` override) via `takpi_common/config_manager` (header 1..40 → BCM, `location` + `hardware` `gpio`/`mcp23017`) + `python-dotenv` `.env` per bridge (not committed, secrets only)
 - See `AGENTS.md` for full standards.
