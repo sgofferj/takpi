@@ -29,6 +29,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CotConfig:
+    """TAK CoT streaming config."""
+
     host: str
     port: int
     cert: str | None = None
@@ -110,6 +112,7 @@ class TakPiApp:
         )
 
     async def start(self) -> None:
+        """Start hardware and CoT."""
         # Hardware – only start if devices configured (per spec: missing → disabled)
         if self.hardware_cfg.devices:
             self.hardware = HardwareManager(self.hardware_cfg, self.bus)
@@ -137,6 +140,7 @@ class TakPiApp:
         )
 
     async def stop(self) -> None:
+        """Stop hardware and CoT."""
         for unsub in self._subs:
             try:
                 unsub()
@@ -158,15 +162,18 @@ class TakPiApp:
         logger.info("TakPiApp stopped")
 
     async def __aenter__(self) -> TakPiApp:
+        """Enter async context."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
         await self.stop()
 
     # -- CoT connection --------------------------------------------------------
 
     async def _connect_cot(self, cfg: CotConfig) -> None:
+        """Connect CotStream and start CotBus."""
         # Lazy import to keep app importable without takstream installed (tests)
         try:
             from takstream import CotStream  # type: ignore
@@ -199,6 +206,7 @@ class TakPiApp:
     # -- Example handlers (replace with your logic) ----------------------------
 
     async def _on_button(self, evt: ButtonEvent) -> None:
+        """Handle ButtonEvent – emergency → CoT + LED, else btn→led toggle."""
         logger.info("Button %s %s", evt.id, "pressed" if evt.pressed else "released")
         # Example: button → CoT (emergency) and LED toggle
         if evt.id == "btn_emergency" and evt.pressed:
@@ -229,6 +237,7 @@ class TakPiApp:
             )
 
     async def _on_encoder(self, evt: EncoderEvent) -> None:
+        """Handle EncoderEvent – delta → LED."""
         logger.info("Encoder %s delta %d pos %d", evt.id, evt.delta, evt.position)
         # Example: encoder → CoT position update or LED brightness (not implemented)
         # Encoder clockwise → LED on, counter → LED off
@@ -240,6 +249,7 @@ class TakPiApp:
         )
 
     async def _on_cot(self, evt: CotReceived) -> None:
+        """Handle CotReceived – emergency/chat/team → LED."""
         cot = evt.cot
         # Example: specific CoT → LED
         # Use takstream.cot.CotEvent predicates
