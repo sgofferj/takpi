@@ -1,0 +1,21 @@
+[Unit]
+Description=TAK Bridge – Flight Illusion GSA-72 Chronometer (hourly time sync via Pi GPIO UART /dev/serial0)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+WorkingDirectory=/home/pi/Dev/TAK/takpi/tak-bridge-chronometer
+EnvironmentFile=/home/pi/Dev/TAK/takpi/tak-bridge-chronometer/.env
+ExecStart=/home/pi/.local/bin/poetry run start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+# Health file cleared on start; service writes /tmp/tak-chronometer-healthy on failure
+ExecStartPre=/bin/sh -c 'rm -f /tmp/tak-chronometer-healthy'
+
+[Install]
+WantedBy=multi-user.target

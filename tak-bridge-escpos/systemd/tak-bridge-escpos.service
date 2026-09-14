@@ -1,0 +1,20 @@
+[Unit]
+Description=TAK Bridge – ESC/POS Thermal Printer (softserial GPIO or hardware serial, fat/double, 911 alarm)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+WorkingDirectory=/home/pi/Dev/TAK/takpi/tak-bridge-escpos
+EnvironmentFile=/home/pi/Dev/TAK/takpi/tak-bridge-escpos/.env
+ExecStart=/home/pi/.local/bin/poetry run start
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+ExecStartPre=/bin/sh -c 'rm -f /tmp/tak-escpos-healthy'
+
+[Install]
+WantedBy=multi-user.target

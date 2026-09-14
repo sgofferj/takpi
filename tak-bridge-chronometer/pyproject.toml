@@ -1,0 +1,81 @@
+[project]
+name = "tak-bridge-chronometer"
+version = "0.1.0"
+description = "Raspberry Pi bridge for Flight Illusion GSA-72 Chronometer – syncs local/UTC from Pi time hourly"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Stefan Gofferje", email = "stefan@gofferje.net" },
+]
+maintainers = [
+    { name = "Stefan Gofferje", email = "stefan@gofferje.net" },
+]
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "pyserial (>=3.5,<4.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)",
+    "pyyaml (>=6.0,<7.0)",
+    "requests (>=2.31.0,<3.0.0)",
+    "defusedxml (>=0.7.0,<1.0.0)",
+    "tzdata (>=2024.1,<2025.0)",
+]
+
+[dependency-groups]
+dev = [
+    "black (>=26.1.0,<27.0.0)",
+    "mypy (>=1.19.1,<2.0.0)",
+    "pylint (>=4.0.4,<5.0.0)",
+    "pytest (>=8.4.0,<9.0.0)",
+    "pytest-asyncio (>=1.1.0,<2.0.0)",
+    "types-pyserial (>=3.5.0,<4.0.0)",
+    "pre-commit (>=4.5.1,<5.0.0)",
+]
+
+[project.scripts]
+start = "tak_bridge_chronometer.__main__:run"
+
+[tool.poetry]
+packages = [{ include = "tak_bridge_chronometer", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+pyserial = { version = ">=3.5,<4.0" }
+python-dotenv = { version = ">=1.2.1,<2.0.0" }
+pyyaml = { version = ">=6.0,<7.0" }
+requests = { version = ">=2.31.0,<3.0.0" }
+defusedxml = { version = ">=0.7.0,<1.0.0" }
+tzdata = { version = ">=2024.1,<2025.0" }
+takpi-common = { path = "../common", develop = true }
+python-tak-cot-streaming = { path = "../python-tak-cot-streaming", develop = true }
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true
+warn_unused_configs = false
+
+[tool.pylint.messages_control]
+disable = ["too-many-locals", "too-many-statements", "too-many-return-statements", "unused-variable", "line-too-long", "fixme", "import-error", "missing-function-docstring", "invalid-name", "global-statement", "too-many-branches", "too-many-instance-attributes", "broad-exception-caught", "too-many-arguments", "too-few-public-methods", "too-many-positional-arguments", "unused-argument", "protected-access", "import-outside-toplevel", "too-many-nested-blocks"]
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint.basic]
+good-names = ["e", "f", "i", "j", "k", "v", "x", "y"]
+
+[tool.pylint.design]
+max-args = 7
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

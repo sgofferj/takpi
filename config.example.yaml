@@ -1,0 +1,14 @@
+# takpi central config – YAML
+# Default path: ~/takpi/config.yaml (or $TAKPI_CONFIG)
+# This file is polled for changes (jitter + mtime watcher).
+
+location:
+  # WGS84 decimal degrees – used when gpsd not available
+  latitude: 60.1699   # Helsinki
+  longitude: 24.9384
+  # altitude: 10  # optional, meters
+
+# future: other bridges can add sections here
+# tak:
+#   callsign: TAKPI-01
+#   team: Cyan

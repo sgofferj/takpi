@@ -1,0 +1,19 @@
+# TAK / certs
+certs/
+*.pem
+*.key
+*.p12
+*.pfx
+.env
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+/tmp/
+AGENTS.md

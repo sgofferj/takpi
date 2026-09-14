@@ -1,0 +1,3 @@
+[submodule "python-tak-cot-streaming"]
+	path = python-tak-cot-streaming
+	url = ../python-tak-cot-streaming

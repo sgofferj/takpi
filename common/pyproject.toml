@@ -1,0 +1,80 @@
+[project]
+name = "takpi-common"
+version = "0.1.0"
+description = "Shared framework for takpi: MCP23017 I2C (buttons/encoders/LEDs), event bus, CotStream integration, health/config"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Stefan Gofferje", email = "stefan@gofferje.net" },
+]
+maintainers = [
+    { name = "Stefan Gofferje", email = "stefan@gofferje.net" },
+]
+requires-python = ">=3.12,<4.0"
+dependencies = [
+    "smbus2 (>=0.5.0,<1.0.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)",
+    "pyyaml (>=6.0,<7.0)",
+    "requests (>=2.31.0,<3.0.0)",
+    "defusedxml (>=0.7.0,<1.0.0)",
+    "tzdata (>=2024.1,<2025.0)",
+]
+
+[dependency-groups]
+dev = [
+    "black (>=26.1.0,<27.0.0)",
+    "mypy (>=1.19.1,<2.0.0)",
+    "pylint (>=4.0.4,<5.0.0)",
+    "pytest (>=8.4.0,<9.0.0)",
+    "pytest-asyncio (>=1.1.0,<2.0.0)",
+    "types-pyserial (>=3.5.0,<4.0.0)",
+    "pre-commit (>=4.5.1,<5.0.0)",
+    "pip-audit (>=2.9.0,<3.0.0)",
+    "types-pyyaml (>=6.0.12.20260906,<7.0.0.0)",
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+packages = [{ include = "takpi_common", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+smbus2 = { version = ">=0.5.0,<1.0.0" }
+python-dotenv = { version = ">=1.2.1,<2.0.0" }
+pyyaml = { version = ">=6.0,<7.0" }
+requests = { version = ">=2.31.0,<3.0.0" }
+defusedxml = { version = ">=0.7.0,<1.0.0" }
+tzdata = { version = ">=2024.1,<2025.0" }
+python-tak-cot-streaming = { path = "../python-tak-cot-streaming", develop = true }
+
+[tool.black]
+line-length = 88
+target-version = ['py312']
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+warn_unused_ignores = false
+warn_redundant_casts = true
+warn_unused_configs = false
+
+[tool.pylint.messages_control]
+disable = ["too-many-locals", "too-many-statements", "too-many-return-statements", "unused-variable", "line-too-long", "fixme", "import-error", "missing-function-docstring", "missing-class-docstring", "invalid-name", "global-statement", "too-many-branches", "too-many-instance-attributes", "broad-exception-caught", "too-many-arguments", "too-few-public-methods", "too-many-positional-arguments", "unused-argument", "unused-import", "protected-access", "import-outside-toplevel", "unidiomatic-typecheck", "try-except-raise"]
+
+[tool.pylint.format]
+max-line-length = 88
+
+[tool.pylint.basic]
+good-names = ["e", "f", "i", "j", "k", "v", "x", "y"]
+
+[tool.pylint.design]
+max-args = 7
+max-parents = 10
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
