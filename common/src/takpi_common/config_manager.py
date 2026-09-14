@@ -549,12 +549,17 @@ def _parse_hardware_section(raw: Any, path: Path) -> HardwareConfigNormalized:
 class TakpiConfig:
     location: LocationConfig = field(default_factory=LocationConfig)
     hardware: HardwareConfigNormalized = field(default_factory=HardwareConfigNormalized)
+    production: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
     path: Path | None = None
     mtime: float | None = None
 
     def has_location(self) -> bool:
         return self.location.is_valid()
+
+    def is_production(self) -> bool:
+        """Return True if production mode (logging disabled)."""
+        return self.production or is_production_env()
 
     def get_gpio_pin(self, keyword: str) -> GpioAssignment | None:
         for a in self.hardware.gpio:
@@ -572,6 +577,25 @@ class TakpiConfig:
         return [a.keyword for a in self.hardware.gpio] + [
             a.keyword for a in self.hardware.mcp
         ]
+
+
+def is_production_env() -> bool:
+    """Check env vars for production mode (TAKPI_PRODUCTION, PRODUCTION)."""
+    for var in ("TAKPI_PRODUCTION", "PRODUCTION", "TAKPI_ENV"):
+        val = os.getenv(var, "").strip().lower()
+        if val in ("1", "true", "yes", "on", "prod", "production"):
+            return True
+    return False
+
+
+def apply_production_logging(disable: bool = True) -> None:
+    """Disable all logging if production mode (per spec)."""
+    if disable:
+        logging.disable(logging.CRITICAL)
+        for handler in logging.root.handlers[:]:
+            logging.root.removeHandler(handler)
+    else:
+        logging.disable(logging.NOTSET)
 
 
 def get_default_config_path() -> Path:
@@ -692,11 +716,30 @@ def load_yaml_config(path: Path | None = None) -> TakpiConfig:
             loc_cfg = env_loc
             logger.info("Using location from env fallback: %s", loc_cfg)
 
+    # Parse production flag (disables logging completely)
+    production = False
+    prod_raw = raw.get("production")
+    if isinstance(prod_raw, bool):
+        production = prod_raw
+    elif isinstance(prod_raw, str):
+        production = prod_raw.strip().lower() in ("1", "true", "yes", "on")
+    elif isinstance(prod_raw, int):
+        production = bool(prod_raw)
+    if is_production_env():
+        production = True
+    if production:
+        apply_production_logging(True)
+
     # Parse hardware section
     hardware_cfg = _parse_hardware_section(raw.get("hardware"), path)
 
     return TakpiConfig(
-        location=loc_cfg, hardware=hardware_cfg, raw=raw, path=path, mtime=mtime
+        location=loc_cfg,
+        hardware=hardware_cfg,
+        production=production,
+        raw=raw,
+        path=path,
+        mtime=mtime,
     )
 
 
@@ -756,11 +799,13 @@ class ConfigManager:
             new_cfg = load_yaml_config(self.path)
             old_loc = self._config.location if self._config else None
             old_hw = self._config.hardware if self._config else None
+            old_prod = self._config.production if self._config else None
             # Check if anything meaningful changed
             if (
                 new_cfg.mtime != self._mtime
                 or new_cfg.location != old_loc
                 or new_cfg.hardware != old_hw
+                or new_cfg.production != old_prod
             ):
                 self._config = new_cfg
                 self._mtime = new_cfg.mtime
