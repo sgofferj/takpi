@@ -379,6 +379,7 @@ class WeatherProvider:
         self._fetch_debounce_s: float = 60.0
 
     async def start(self) -> None:
+        """Start provider."""
         if self._running:
             return
         self._running = True
@@ -387,6 +388,7 @@ class WeatherProvider:
         logger.info("WeatherProvider started (interval %.0fs)", self.interval_s)
 
     async def stop(self) -> None:
+        """Stop provider."""
         self._running = False
         if self._unsub_loc:
             self._unsub_loc()
@@ -401,13 +403,16 @@ class WeatherProvider:
         logger.info("WeatherProvider stopped")
 
     async def __aenter__(self) -> WeatherProvider:
+        """Enter async context."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
         await self.stop()
 
     async def _on_location(self, evt: LocationUpdate) -> None:
+        """Handle LocationUpdate – trigger immediate fetch on config change."""
         prev = self._last_location
         self._last_location = evt
         logger.debug(
@@ -464,6 +469,7 @@ class WeatherProvider:
             logger.debug("WeatherProvider _on_location trigger check failed: %s", exc)
 
     async def _poll_loop(self) -> None:
+        """Poll loop – periodic FMI fetch."""
         # Wait a bit for initial location to arrive
         await asyncio.sleep(2.0)
         while self._running:
@@ -486,9 +492,11 @@ class WeatherProvider:
                 raise
 
     async def _sleep_cancellable(self, timeout: float) -> None:
+        """Sleep cancellable."""
         await asyncio.sleep(timeout)
 
     async def _maybe_fetch_and_publish(self) -> None:
+        """Fetch FMI if in Finland and publish WeatherUpdate + chrono temp."""
         if self._last_location is None:
             logger.debug("WeatherProvider: no location yet, skip")
             return
@@ -539,8 +547,8 @@ class WeatherProvider:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("WeatherProvider: failed to set chrono temp: %s", exc)
 
-    # For testing, allow direct fetch
     async def fetch_now(self, lat: float, lon: float) -> WeatherUpdate | None:
+        """Direct fetch for testing – bypass location and publish."""
         if not is_in_finland(lat, lon):
             return None
         xml = await _fetch_fmi_multipoint(lat, lon, timeout=self.fmi_timeout)
