@@ -1,8 +1,8 @@
-# takpi – Raspberry Pi TAK Hardware Bridge Collection
+# takpi – Physical controls for TAK on Raspberry Pi
 
-Monorepo for bridging hardware attached to a Raspberry Pi into the TAK ecosystem.
+Turn your Pi into a hands-on TAK station – real buttons, dials and gauges that work when the touchscreen doesn't. This monorepo connects tactile hardware (Davtron clocks, thermal printers, MCP23017 expanders, GPS) to the Team Awareness Kit ecosystem.
 
-Each sub-directory is an **independent** Python project (own `pyproject.toml`, `systemd` unit, `README`). Shared helpers live in `common/` (`takpi_common`).
+Each bridge is a standalone project that happens to share the same Pi. Common helpers live in `common/` (`takpi_common`), each piece of hardware gets its own folder with its own setup, service and docs.
 
 ## Bridges
 
@@ -11,7 +11,7 @@ Each sub-directory is an **independent** Python project (own `pyproject.toml`, `
 | tak-bridge-chronometer | Flight Illusion GSA-72 Chronometer (Davtron) | Serial 38400 baud (`/dev/serial0` GPIO14 TXD header 8 / GPIO15 RXD header 10, 3.3V TTL) + `hardware` `8: gauge_tx` | ✅ Implemented – library + hourly sync + GPS time (`LocationProvider`) + FMI temp → chrono | `tak-bridge-chronometer/` |
 | tak-bridge-escpos | ESC/POS Thermal Printer (TTL) | Softserial header `13: escpos_tx` → BCM27 / `15: escpos_rx` via `pigpio` **or** hardware `port` `/dev/serial0`/`/dev/ttyUSB0` | ✅ Implemented – async driver (fat/double, `print_alarm` 911) + `PrintRequest`/`CotReceived`→print via `EventBus`/`CotBus` (header → BCM via `config_manager`) | `tak-bridge-escpos/` |
 
-See `AGENTS.md:90` for agent coordination and `tak-bridge-chronometer/README.md` for wiring/env.
+See `tak-bridge-chronometer/README.md` for wiring/env.
 
 ## Shared Framework (`common/` + `python-tak-cot-streaming`) + ESC/POS Bridge
 
@@ -26,7 +26,7 @@ Takpi's **common** library (`common/src/takpi_common`) provides:
 - **Weather** (`weather.py:1`) `WeatherProvider` Finland `±0.5/0.7` bbox via `requests`+`defusedxml`, nearest FMI station → `WeatherUpdate` + `ChronometerClient.gsa72_set_temp_c` (config-trigger only)
 - **ESC/POS printer** (`tak-bridge-escpos/`) – async driver `escpos.py:1` with **softserial GPIO** (`tx_pin`/`rx_pin` via `HEADER_TO_BCM` from `hardware.gpio` `escpos_tx`/`escpos_rx`, or `port`), `fat`/`print_alarm` 911 via `EventBus`/`CotBus`
 
-All via venv `poetry` (per `AGENTS.md:48`), `black`/`mypy --strict`/`pylint` clean, `pytest` with `FakeSMBus`/`FakeSerial`/`AsyncMock` (no Pi, no TAK server).
+All via `poetry` venvs, `black`/`mypy --strict`/`pylint` clean, `pytest` with `FakeSMBus`/`FakeSerial`/`AsyncMock` (no Pi, no TAK server).
 
 See `common/README_mcp23017.md`, `common/README_bus.md`, `common/README_cot.md`, `common/README_app.md`, `tak-bridge-escpos/README_escpos.md`/`README_main.md` and `python-tak-cot-streaming/README.md` for takstream.
 
@@ -54,7 +54,7 @@ See `common/README_mcp23017.md`, `common/README_bus.md`, `common/README_cot.md`,
 2. Create `README_<name>.md` at *both* levels: `takpi/README_<name>.md` (monorepo aggregation) + `takpi/tak-bridge-<name>/README_<name>.md` (submodule specifics) – be thorough (hardware, protocol, API, env, systemd, wiring, examples, tests, references).
 3. If the bridge splits into library + service submodules, create `README_<submodule>.md` per Python submodule (e.g., `README_library.md`, `README_main.md`) as done for chronometer.
 4. Append row(s) to this index and to the bridge's own `README.md` index.
-5. Update `AGENTS.md:84` hardware inventory and `takpi/README.md:9` bridge table.
+5. Update hardware inventory and `takpi/README.md:9` bridge table.
 
 Current submodule count: **2 bridges (chronometer 2 + escpos 2) + common framework (4: mcp23017, bus, cot, app) + takstream + 2 top-level aggregations → 11 `README_<topic>.md` files** (listed above).
 
@@ -76,7 +76,6 @@ poetry run --directory tak-bridge-chronometer pytest -v
 
 ```
 takpi/
-  AGENTS.md                         # coordination (now mentions takstream, MCP23017, escpos softserial, location/weather)
   README.md                         # this file (index of 11 README_<topic>.md)
   README_chronometer.md             # thorough top-level chronometer doc (README_<topic>.md #1)
   README_escpos.md                  # thorough top-level escpos doc (README_<topic>.md #9, softserial GPIO + 911)
@@ -140,4 +139,3 @@ takpi/
 - Python 3.12+, Poetry, `black`/`mypy --strict`/`pylint`, `pytest`+`pytest-asyncio`
 - Health files: `/tmp/tak-<bridge>-healthy`
 - Central config `~/takpi/config.yaml` (`TAKPI_CONFIG` override) via `takpi_common/config_manager` (header 1..40 → BCM, `location` + `hardware` `gpio`/`mcp23017`) + `python-dotenv` `.env` per bridge (not committed, secrets only)
-- See `AGENTS.md` for full standards.
