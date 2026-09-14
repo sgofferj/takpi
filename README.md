@@ -25,6 +25,7 @@ Takpi's **common** library (`common/src/takpi_common`) provides:
 - **Location** (`location.py:1`) `LocationProvider` gpsd `127.0.0.1:2947` → `LocationUpdate` 10m jitter, speed-adaptive 1/5/10/30s else `config.yaml` fallback, `utc_to_local` via `zoneinfo`, `LocationCotBridge` SA `a-f-G-U-C`
 - **Weather** (`weather.py:1`) `WeatherProvider` Finland `±0.5/0.7` bbox via `requests`+`defusedxml`, nearest FMI station → `WeatherUpdate` + `ChronometerClient.gsa72_set_temp_c` (config-trigger only)
 - **ESC/POS printer** (`tak-bridge-escpos/`) – async driver `escpos.py:1` with **softserial GPIO** (`tx_pin`/`rx_pin` via `HEADER_TO_BCM` from `hardware.gpio` `escpos_tx`/`escpos_rx`, or `port`), `fat`/`print_alarm` 911 via `EventBus`/`CotBus`
+- **Wipe** (`wipe.py:1`) `WipeRegistry`/`WipeManager` – 10s hold `wipe`/`btn_wipe` on `EventBus` → secure overwrite (`certs`/`config` `tak`/`location`/cache/`journal`) + `poweroff`
 
 All via `poetry` venvs, `black`/`mypy --strict`/`pylint` clean, `pytest` with `FakeSMBus`/`FakeSerial`/`AsyncMock` (no Pi, no TAK server).
 
@@ -55,6 +56,7 @@ See `common/README_mcp23017.md`, `common/README_bus.md`, `common/README_cot.md`,
 3. If the bridge splits into library + service submodules, create `README_<submodule>.md` per Python submodule (e.g., `README_library.md`, `README_main.md`) as done for chronometer.
 4. Append row(s) to this index and to the bridge's own `README.md` index.
 5. Update hardware inventory and `takpi/README.md:9` bridge table.
+6. If you handle sensitive data (`certs`/`tak`/`location`/cache), register it with `WipeRegistry` (`common/src/takpi_common/wipe.py:1`) so the `wipe` button can securely delete it.
 
 Current submodule count: **2 bridges (chronometer 2 + escpos 2) + common framework (4: mcp23017, bus, cot, app) + takstream + 2 top-level aggregations → 11 `README_<topic>.md` files** (listed above).
 
@@ -92,12 +94,13 @@ takpi/
       __init__.py
       bus.py                        # EventBus
       config.py / health.py
-      config_manager.py             # ConfigManager, HEADER_TO_BCM, register_hardware_keyword, TakpiConfig (YAML, hardware)
+      config_manager.py             # ConfigManager, HEADER_TO_BCM, register_hardware_keyword, TakpiConfig (YAML, hardware, production)
       app.py                        # TakPiApp + CotConfig (from_takpi_config)
       cot_bus.py                    # CotBus (CotReceived/CotSend)
       location.py                   # LocationProvider, LocationUpdate (gpsd→config, jitter, speed, gps_time, utc_to_local)
       location_cot.py               # LocationCotBridge (LocationUpdate→CotSend SA)
       weather.py                    # WeatherProvider, WeatherUpdate (Finland + FMI, config-trigger)
+      wipe.py                       # WipeRegistry, WipeManager (10s wipe button, secure overwrite + poweroff)
       mcp23017/
         driver.py                   # MCP23017 + FakeSMBus
         io.py                       # Button/Encoder/Led configs & events
