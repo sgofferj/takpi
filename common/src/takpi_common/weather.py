@@ -128,6 +128,158 @@ async def _fetch_fmi_multipoint(
     return await loop.run_in_executor(None, _fetch)
 
 
+def _parse_stations(root: Any, ns: dict[str, str]) -> dict[str, tuple[float, float]]:
+    """Parse stations from FMI XML."""
+    stations: dict[str, tuple[float, float]] = {}
+    for loc in root.findall(".//target:Location", ns):
+        name_elem = loc.find(
+            'gml:name[@codeSpace="http://xml.fmi.fi/namespace/locationcode/name"]', ns
+        )
+        if name_elem is None or not name_elem.text:
+            continue
+        name = name_elem.text.strip()
+        href_elem = loc.find("target:representativePoint", ns)
+        if href_elem is None:
+            continue
+        href = href_elem.get("{http://www.w3.org/1999/xlink}href", "")
+        point_id = href.lstrip("#")
+        if not point_id:
+            continue
+        for pm in root.findall(".//gml:pointMember", ns):
+            pt = pm.find("gml:Point", ns)
+            if pt is None:
+                continue
+            pid = pt.get("{http://www.opengis.net/gml/3.2}id", "")
+            if pid != point_id:
+                continue
+            pos_text = pt.findtext("gml:pos", namespaces=ns)
+            if not pos_text:
+                continue
+            parts = pos_text.strip().split()
+            if len(parts) < 2:
+                continue
+            try:
+                lat = float(parts[0])
+                lon = float(parts[1])
+                stations[name] = (lat, lon)
+            except ValueError:
+                continue
+            break
+    return stations
+
+
+def _find_nearest(
+    stations: dict[str, tuple[float, float]], target_lat: float, target_lon: float
+) -> tuple[str, float, float, float] | None:
+    """Find nearest station."""
+    nearest_name: str | None = None
+    nearest_dist: float | None = None
+    nearest_lat: float | None = None
+    nearest_lon: float | None = None
+    for name, (slat, slon) in stations.items():
+        d = haversine_m(target_lat, target_lon, slat, slon)
+        if nearest_dist is None or d < nearest_dist:
+            nearest_dist = d
+            nearest_name = name
+            nearest_lat = slat
+            nearest_lon = slon
+    if (
+        nearest_name is None
+        or nearest_lat is None
+        or nearest_lon is None
+        or nearest_dist is None
+    ):
+        return None
+    return (nearest_name, nearest_lat, nearest_lon, nearest_dist)
+
+
+def _parse_fmi_positions(
+    pos_text: str, tup_text: str, num_fields: int
+) -> tuple[list[float], list[float], list[str], int]:
+    """Parse positions and tuples."""
+    pos_tokens = pos_text.strip().split()
+    tup_tokens = tup_text.strip().split()
+    try:
+        num_positions = len(pos_tokens) // 3
+    except Exception:
+        return ([], [], [], 0)
+    pos_lats: list[float] = []
+    pos_lons: list[float] = []
+    for i in range(num_positions):
+        base = i * 3
+        try:
+            plat = float(pos_tokens[base])
+            plon = float(pos_tokens[base + 1])
+            pos_lats.append(plat)
+            pos_lons.append(plon)
+        except (ValueError, IndexError):
+            pos_lats.append(0.0)
+            pos_lons.append(0.0)
+    return (pos_lats, pos_lons, tup_tokens, num_positions)
+
+
+def _find_candidate_indices(
+    pos_lats: list[float],
+    pos_lons: list[float],
+    nearest_lat: float,
+    nearest_lon: float,
+) -> list[int]:
+    """Find indices for nearest station."""
+    candidate_indices: list[int] = []
+    for idx, (plat, plon) in enumerate(zip(pos_lats, pos_lons)):
+        if abs(plat - nearest_lat) < 1e-6 and abs(plon - nearest_lon) < 1e-6:
+            candidate_indices.append(idx)
+    if not candidate_indices:
+        for idx, (plat, plon) in enumerate(zip(pos_lats, pos_lons)):
+            if haversine_m(plat, plon, nearest_lat, nearest_lon) < 50.0:
+                candidate_indices.append(idx)
+    return candidate_indices
+
+
+def _extract_latest(
+    candidate_indices: list[int],
+    tup_tokens: list[str],
+    num_fields: int,
+    idx_t2m: int | None,
+    idx_rh: int | None,
+) -> tuple[float | None, float | None]:
+    """Extract latest temp/rh from candidate indices."""
+
+    def _to_float(s: str) -> float | None:
+        if s == "NaN":
+            return None
+        try:
+            v = float(s)
+            if math.isnan(v):
+                return None
+            return v
+        except ValueError:
+            return None
+
+    latest_temp: float | None = None
+    latest_rh: float | None = None
+    for idx in reversed(candidate_indices):
+        tuple_base = idx * num_fields
+        if tuple_base + num_fields > len(tup_tokens):
+            continue
+        row = tup_tokens[tuple_base : tuple_base + num_fields]
+        if idx_t2m is not None and latest_temp is None:
+            v = _to_float(row[idx_t2m])
+            if v is not None:
+                latest_temp = v
+        if idx_rh is not None and latest_rh is None:
+            v = _to_float(row[idx_rh])
+            if v is not None:
+                latest_rh = v
+        if latest_temp is not None and latest_rh is not None:
+            break
+        if idx_t2m is not None and idx_rh is None and latest_temp is not None:
+            break
+        if idx_rh is not None and idx_t2m is None and latest_rh is not None:
+            break
+    return (latest_temp, latest_rh)
+
+
 def _parse_fmi_xml(
     xml_bytes: bytes, target_lat: float, target_lon: float
 ) -> WeatherUpdate | None:
@@ -153,68 +305,16 @@ def _parse_fmi_xml(
         "xlink": "http://www.w3.org/1999/xlink",
     }
 
-    # 1. Location metadata: map point id -> (name, lat, lon)
-    # Build map name -> (lat,lon)
-    stations: dict[str, tuple[float, float]] = {}
-    # Also map point id -> name for fallback?
-    # Parse target:Location entries
-    for loc in root.findall(".//target:Location", ns):
-        name_elem = loc.find(
-            'gml:name[@codeSpace="http://xml.fmi.fi/namespace/locationcode/name"]', ns
-        )
-        if name_elem is None or not name_elem.text:
-            continue
-        name = name_elem.text.strip()
-        href_elem = loc.find("target:representativePoint", ns)
-        if href_elem is None:
-            continue
-        href = href_elem.get("{http://www.w3.org/1999/xlink}href", "")
-        point_id = href.lstrip("#")
-        if not point_id:
-            continue
-        # Find point
-        for pm in root.findall(".//gml:pointMember", ns):
-            pt = pm.find("gml:Point", ns)
-            if pt is None:
-                continue
-            pid = pt.get("{http://www.opengis.net/gml/3.2}id", "")
-            if pid != point_id:
-                continue
-            pos_text = pt.findtext("gml:pos", namespaces=ns)
-            if not pos_text:
-                continue
-            parts = pos_text.strip().split()
-            if len(parts) < 2:
-                continue
-            try:
-                lat = float(parts[0])
-                lon = float(parts[1])
-                stations[name] = (lat, lon)
-            except ValueError:
-                continue
-            break
-
+    stations = _parse_stations(root, ns)
     if not stations:
         logger.warning("FMI: no stations parsed")
         return None
 
-    # Find nearest station
-    nearest_name: str | None = None
-    nearest_dist: float | None = None
-    nearest_lat: float | None = None
-    nearest_lon: float | None = None
-    for name, (slat, slon) in stations.items():
-        d = haversine_m(target_lat, target_lon, slat, slon)
-        if nearest_dist is None or d < nearest_dist:
-            nearest_dist = d
-            nearest_name = name
-            nearest_lat = slat
-            nearest_lon = slon
-
-    if nearest_name is None or nearest_lat is None or nearest_lon is None:
+    nearest = _find_nearest(stations, target_lat, target_lon)
+    if nearest is None:
         return None
+    nearest_name, nearest_lat, nearest_lon, nearest_dist = nearest
 
-    # 2. Parse fields to find indices for t2m and rh
     fields = [f.get("name") for f in root.findall(".//swe:field", ns)]
     try:
         idx_t2m = fields.index("t2m")
@@ -231,104 +331,31 @@ def _parse_fmi_xml(
 
     num_fields = len(fields) if fields else 13
 
-    # 3. Parse positions and tuples
     pos_text = root.findtext(".//gmlcov:positions", namespaces=ns)
     tup_text = root.findtext(".//gml:doubleOrNilReasonTupleList", namespaces=ns)
     if not pos_text or not tup_text:
         logger.warning("FMI: missing positions or tuples")
         return None
 
-    pos_tokens = pos_text.strip().split()
-    tup_tokens = tup_text.strip().split()
+    pos_lats, pos_lons, tup_tokens, _ = _parse_fmi_positions(
+        pos_text, tup_text, num_fields
+    )
 
-    # Positions are triples lat, lon, epoch
-    # Number of positions = len(pos_tokens)//3
-    # Number of tuples = len(tup_tokens)//num_fields should equal num positions
-    # If mismatch, trust positions count
-    try:
-        num_positions = len(pos_tokens) // 3
-    except Exception:
-        return None
-
-    # Build list of (lat,lon) for each position index
-    pos_lats: list[float] = []
-    pos_lons: list[float] = []
-    for i in range(num_positions):
-        base = i * 3
-        try:
-            plat = float(pos_tokens[base])
-            plon = float(pos_tokens[base + 1])
-            # epoch = pos_tokens[base+2] ignored
-            pos_lats.append(plat)
-            pos_lons.append(plon)
-        except (ValueError, IndexError):
-            pos_lats.append(0.0)
-            pos_lons.append(0.0)
-
-    # Parse tuples into rows
-    # tup_tokens is flat list where each row is num_fields tokens
-    # Need to handle "NaN" strings
-    def _to_float(s: str) -> float | None:
-        if s == "NaN":
-            return None
-        try:
-            v = float(s)
-            if math.isnan(v):
-                return None
-            return v
-        except ValueError:
-            return None
-
-    # Collect for nearest station: all indices where pos matches nearest station within ~0.001 deg (≈100m)
-    # Use exact match with small epsilon due to floating representation
-    candidate_indices: list[int] = []
-    for idx, (plat, plon) in enumerate(zip(pos_lats, pos_lons)):
-        if abs(plat - nearest_lat) < 1e-6 and abs(plon - nearest_lon) < 1e-6:
-            candidate_indices.append(idx)
-    # Fallback to haversine if exact fails (maybe rounding)
-    if not candidate_indices:
-        for idx, (plat, plon) in enumerate(zip(pos_lats, pos_lons)):
-            if haversine_m(plat, plon, nearest_lat, nearest_lon) < 50.0:
-                candidate_indices.append(idx)
-
+    candidate_indices = _find_candidate_indices(
+        pos_lats, pos_lons, nearest_lat, nearest_lon
+    )
     if not candidate_indices:
         logger.warning("FMI: no positions for nearest station %s", nearest_name)
         return None
 
-    # For those indices, get latest (highest idx) non-NaN
-    # Since positions are time-ordered per station ascending, last candidate is latest
-    latest_temp: float | None = None
-    latest_rh: float | None = None
-    # Iterate reversed to find latest valid
-    for idx in reversed(candidate_indices):
-        tuple_base = idx * num_fields
-        if tuple_base + num_fields > len(tup_tokens):
-            continue
-        row = tup_tokens[tuple_base : tuple_base + num_fields]
-        if idx_t2m is not None and latest_temp is None:
-            v = _to_float(row[idx_t2m])
-            if v is not None:
-                latest_temp = v
-        if idx_rh is not None and latest_rh is None:
-            v = _to_float(row[idx_rh])
-            if v is not None:
-                latest_rh = v
-        if latest_temp is not None and latest_rh is not None:
-            break
-        # If only one field, break when found
-        if idx_t2m is not None and idx_rh is None and latest_temp is not None:
-            break
-        if idx_rh is not None and idx_t2m is None and latest_rh is not None:
-            break
-
-    # If still None, try any index (maybe all NaN at latest, earlier valid exists)
-    # Already did reversed search, so done.
+    latest_temp, latest_rh = _extract_latest(
+        candidate_indices, tup_tokens, num_fields, idx_t2m, idx_rh
+    )
 
     if latest_temp is None and latest_rh is None:
         logger.info(
             "FMI station %s has no valid t2m/rh in last observations", nearest_name
         )
-        # Still publish with None? Better return None to signal no data
         return WeatherUpdate(
             temperature_c=None,
             humidity_pct=None,
@@ -379,6 +406,7 @@ class WeatherProvider:
         self._fetch_debounce_s: float = 60.0
 
     async def start(self) -> None:
+        """Start provider."""
         if self._running:
             return
         self._running = True
@@ -387,6 +415,7 @@ class WeatherProvider:
         logger.info("WeatherProvider started (interval %.0fs)", self.interval_s)
 
     async def stop(self) -> None:
+        """Stop provider."""
         self._running = False
         if self._unsub_loc:
             self._unsub_loc()
@@ -401,13 +430,16 @@ class WeatherProvider:
         logger.info("WeatherProvider stopped")
 
     async def __aenter__(self) -> WeatherProvider:
+        """Enter async context."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
         await self.stop()
 
     async def _on_location(self, evt: LocationUpdate) -> None:
+        """Handle LocationUpdate – trigger immediate fetch on config change."""
         prev = self._last_location
         self._last_location = evt
         logger.debug(
@@ -464,6 +496,7 @@ class WeatherProvider:
             logger.debug("WeatherProvider _on_location trigger check failed: %s", exc)
 
     async def _poll_loop(self) -> None:
+        """Poll loop – periodic FMI fetch."""
         # Wait a bit for initial location to arrive
         await asyncio.sleep(2.0)
         while self._running:
@@ -486,9 +519,11 @@ class WeatherProvider:
                 raise
 
     async def _sleep_cancellable(self, timeout: float) -> None:
+        """Sleep cancellable."""
         await asyncio.sleep(timeout)
 
     async def _maybe_fetch_and_publish(self) -> None:
+        """Fetch FMI if in Finland and publish WeatherUpdate + chrono temp."""
         if self._last_location is None:
             logger.debug("WeatherProvider: no location yet, skip")
             return
@@ -539,8 +574,8 @@ class WeatherProvider:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 logger.warning("WeatherProvider: failed to set chrono temp: %s", exc)
 
-    # For testing, allow direct fetch
     async def fetch_now(self, lat: float, lon: float) -> WeatherUpdate | None:
+        """Direct fetch for testing – bypass location and publish."""
         if not is_in_finland(lat, lon):
             return None
         xml = await _fetch_fmi_multipoint(lat, lon, timeout=self.fmi_timeout)

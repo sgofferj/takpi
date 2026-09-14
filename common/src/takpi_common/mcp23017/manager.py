@@ -239,6 +239,7 @@ class HardwareManager:
     """
 
     def __init__(self, config: HardwareConfig, bus: EventBus) -> None:
+        """__init__."""
         self.cfg = config
         self.bus = bus
         self._devices: dict[int, MCP23017] = {}
@@ -361,15 +362,18 @@ class HardwareManager:
         logger.info("HardwareManager stopped")
 
     async def __aenter__(self) -> HardwareManager:
+        """__aenter__."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """__aexit__."""
         await self.stop()
 
     # -- I2C helper --------------------------------------------------------------
 
     async def _run_in_executor(self, func: Any, *args: Any) -> Any:
+        """_run_in_executor."""
         loop = asyncio.get_running_loop()
         async with self._i2c_lock:
             return await loop.run_in_executor(None, func, *args)
@@ -377,6 +381,7 @@ class HardwareManager:
     # -- LED handling (main → hardware) ----------------------------------------
 
     async def _handle_led_command(self, cmd: LedCommand) -> None:
+        """_handle_led_command."""
         rt = self._leds.get(cmd.id)
         if rt is None:
             # Try by address+pin fallback
@@ -425,6 +430,7 @@ class HardwareManager:
             )
 
     async def _blink_led(self, rt: LedRuntime, cmd: LedCommand) -> None:
+        """_blink_led."""
         assert cmd.blink_ms is not None and cmd.blink_ms > 0
         dev = self._devices[rt.cfg.device_addr]
         period = cmd.blink_ms / 1000.0 / 2.0  # half period
@@ -457,6 +463,7 @@ class HardwareManager:
     # -- Poll loop (hardware → main) -------------------------------------------
 
     async def _poll_loop(self) -> None:
+        """_poll_loop."""
         interval = self.cfg.poll_interval_ms / 1000.0
         while self._running:
             start = time.monotonic()
@@ -470,6 +477,7 @@ class HardwareManager:
             await asyncio.sleep(sleep_for)
 
     async def _poll_once(self, now: float) -> None:
+        """_poll_once."""
         # Read all devices in parallel (per device lock already in _run_in_executor)
         # Snapshot GPIOs
         gpios: dict[int, int] = {}

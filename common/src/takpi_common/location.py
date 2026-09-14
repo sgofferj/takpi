@@ -215,6 +215,7 @@ class LocationUpdate:
     gps_time: datetime | None = None  # UTC time from GPS TPV, if available
 
     def as_tuple(self) -> tuple[float, float]:
+        """Return (lat, lon) tuple."""
         return (self.latitude, self.longitude)
 
 
@@ -261,6 +262,7 @@ class LocationProvider:
         self._last_gps_time_received: float = 0.0
 
     async def start(self) -> None:
+        """Start provider."""
         if self._running:
             return
         self._running = True
@@ -274,6 +276,7 @@ class LocationProvider:
         )
 
     async def stop(self) -> None:
+        """Stop provider."""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -285,13 +288,16 @@ class LocationProvider:
         logger.info("LocationProvider stopped")
 
     async def __aenter__(self) -> LocationProvider:
+        """Enter async context."""
         await self.start()
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        """Exit async context."""
         await self.stop()
 
     def get_last_location(self) -> LocationUpdate | None:
+        """Return last published location or None."""
         return self._last_published
 
     def get_gps_time(self) -> datetime | None:

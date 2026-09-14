@@ -45,6 +45,7 @@ class EventBus:
     """Async pub/sub bus for takpi main process ↔ hardware ↔ CoT."""
 
     def __init__(self) -> None:
+        """__init__."""
         self._subs: dict[Type[Any], list[Handler]] = defaultdict(list)
         self._lock = asyncio.Lock()
 
@@ -60,6 +61,7 @@ class EventBus:
         self._subs[event_type].append(handler)  # type: ignore[arg-type]
 
         def unsubscribe() -> None:
+            """unsubscribe."""
             try:
                 self._subs[event_type].remove(handler)  # type: ignore[arg-type]
             except ValueError:
@@ -105,6 +107,7 @@ class EventBus:
         future: asyncio.Future[T] = asyncio.get_running_loop().create_future()
 
         def _handler(event: T) -> None:
+            """_handler."""
             if not future.done():
                 future.set_result(event)
 

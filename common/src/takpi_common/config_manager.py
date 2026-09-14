@@ -177,10 +177,12 @@ def _find_spec(keyword: str) -> HardwareSpec | None:
 
 
 def is_keyword_registered(keyword: str) -> bool:
+    """Return True if keyword is registered (exact or wildcard)."""
     return _find_spec(keyword) is not None
 
 
 def get_registered_keywords() -> dict[str, HardwareSpec]:
+    """Return copy of hardware registry."""
     return dict(_HARDWARE_REGISTRY)
 
 
@@ -358,6 +360,173 @@ def _parse_mcp_pin(pin_name: str) -> int | None:
     return bit if port == "A" else 8 + bit
 
 
+def _parse_gpio_section(
+    gpio_raw: Any,
+    path: Path,
+    result: HardwareConfigNormalized,
+    used_gpio: dict[int, str],
+) -> None:
+    """Parse hardware.gpio section."""
+    if gpio_raw is None:
+        return
+    if not isinstance(gpio_raw, dict):
+        msg = f"Config {path} hardware.gpio is not a mapping, ignoring"
+        logger.warning(msg)
+        result.warnings.append(msg)
+        return
+    for k, v in gpio_raw.items():
+        try:
+            header_pin = int(str(k).strip())
+        except ValueError:
+            msg = f"Config {path} hardware.gpio key {k!r} is not an integer header pin, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        if not 1 <= header_pin <= 40:
+            msg = f"Config {path} hardware.gpio pin {header_pin} out of range 1..40, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        bcm = header_to_bcm(header_pin)
+        if bcm is None:
+            msg = f"Config {path} hardware.gpio pin {header_pin} is power/GND, not GPIO, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        if not isinstance(v, str) or not v.strip():
+            msg = f"Config {path} hardware.gpio pin {header_pin} keyword {v!r} invalid, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        keyword = v.strip()
+        if header_pin in used_gpio:
+            msg = f"Config {path} hardware.gpio pin {header_pin} duplicate keyword {keyword!r} (already {used_gpio[header_pin]!r}), skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        spec = _find_spec(keyword)
+        if spec is None:
+            msg = f"Config {path} hardware.gpio pin {header_pin} keyword {keyword!r} not registered by any module, skipping (unknown)"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        if "gpio" not in spec.buses:
+            msg = f"Config {path} hardware.gpio pin {header_pin} keyword {keyword!r} not allowed on gpio (spec buses {spec.buses}), skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        for existing in result.gpio:
+            if existing.keyword == keyword:
+                logger.warning(
+                    "Config %s hardware.gpio keyword %r used on multiple pins (%d and %d)",
+                    path,
+                    keyword,
+                    existing.header_pin,
+                    header_pin,
+                )
+                break
+        used_gpio[header_pin] = keyword
+        result.gpio.append(
+            GpioAssignment(header_pin=header_pin, bcm=bcm, keyword=keyword, spec=spec)
+        )
+
+
+def _parse_mcp_section(
+    mcp_raw: Any,
+    path: Path,
+    result: HardwareConfigNormalized,
+    used_mcp: dict[tuple[int, str], str],
+) -> None:
+    """Parse hardware.mcp23017 section."""
+    if mcp_raw is None:
+        return
+    if not isinstance(mcp_raw, dict):
+        msg = f"Config {path} hardware.mcp23017 is not a mapping, ignoring"
+        logger.warning(msg)
+        result.warnings.append(msg)
+        return
+    for addr_k, pins_v in mcp_raw.items():
+        try:
+            addr_str = str(addr_k).strip()
+            address = int(addr_str, 0)  # auto base
+        except ValueError:
+            msg = f"Config {path} hardware.mcp23017 key {addr_k!r} not a valid address, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        if not 0x20 <= address <= 0x27:
+            msg = f"Config {path} hardware.mcp23017 address {addr_k!r} ({hex(address)}) out of range 0x20..0x27, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        if not isinstance(pins_v, dict):
+            msg = f"Config {path} hardware.mcp23017 {hex(address)} value is not a mapping, skipping"
+            logger.warning(msg)
+            result.warnings.append(msg)
+            continue
+        for pin_name_raw, keyword_raw in pins_v.items():
+            pin_name = str(pin_name_raw).strip()
+            pin_idx = _parse_mcp_pin(pin_name)
+            if pin_idx is None:
+                msg = f"Config {path} hardware.mcp23017 {hex(address)} pin {pin_name!r} invalid (expect GPA0..GPB7), skipping"
+                logger.warning(msg)
+                result.warnings.append(msg)
+                continue
+            pin_name = pin_name.upper()
+            if pin_name not in (
+                "GPA0",
+                "GPA1",
+                "GPA2",
+                "GPA3",
+                "GPA4",
+                "GPA5",
+                "GPA6",
+                "GPA7",
+                "GPB0",
+                "GPB1",
+                "GPB2",
+                "GPB3",
+                "GPB4",
+                "GPB5",
+                "GPB6",
+                "GPB7",
+            ):
+                pass
+            if not isinstance(keyword_raw, str) or not keyword_raw.strip():
+                msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword_raw!r} invalid, skipping"
+                logger.warning(msg)
+                result.warnings.append(msg)
+                continue
+            keyword = keyword_raw.strip()
+            key = (address, pin_name)
+            if key in used_mcp:
+                msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} duplicate, skipping"
+                logger.warning(msg)
+                result.warnings.append(msg)
+                continue
+            spec = _find_spec(keyword)
+            if spec is None:
+                msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword!r} not registered, skipping"
+                logger.warning(msg)
+                result.warnings.append(msg)
+                continue
+            if "mcp" not in spec.buses:
+                msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword!r} not allowed on mcp (buses {spec.buses}), skipping"
+                logger.warning(msg)
+                result.warnings.append(msg)
+                continue
+            used_mcp[key] = keyword
+            result.mcp.append(
+                McpAssignment(
+                    address=address,
+                    pin_name=pin_name,
+                    pin_index=pin_idx,
+                    keyword=keyword,
+                    spec=spec,
+                )
+            )
+
+
 def _parse_hardware_section(raw: Any, path: Path) -> HardwareConfigNormalized:
     """Parse raw ``hardware`` dict from YAML, validate against registry, collect warnings."""
     result = HardwareConfigNormalized()
@@ -369,177 +538,10 @@ def _parse_hardware_section(raw: Any, path: Path) -> HardwareConfigNormalized:
         result.warnings.append(msg)
         return result
 
-    # Track used pins to detect duplicates (only for valid entries)
     used_gpio: dict[int, str] = {}
     used_mcp: dict[tuple[int, str], str] = {}
-
-    # ---- gpio: header_pin -> keyword ----
-    gpio_raw = raw.get("gpio")
-    if gpio_raw is not None:
-        if not isinstance(gpio_raw, dict):
-            msg = f"Config {path} hardware.gpio is not a mapping, ignoring"
-            logger.warning(msg)
-            result.warnings.append(msg)
-        else:
-            for k, v in gpio_raw.items():
-                # k is header pin (int or str)
-                try:
-                    header_pin = int(str(k).strip())
-                except ValueError:
-                    msg = f"Config {path} hardware.gpio key {k!r} is not an integer header pin, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                if not 1 <= header_pin <= 40:
-                    msg = f"Config {path} hardware.gpio pin {header_pin} out of range 1..40, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                bcm = header_to_bcm(header_pin)
-                if bcm is None:
-                    msg = f"Config {path} hardware.gpio pin {header_pin} is power/GND, not GPIO, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                # v is keyword (str)
-                if not isinstance(v, str) or not v.strip():
-                    msg = f"Config {path} hardware.gpio pin {header_pin} keyword {v!r} invalid, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                keyword = v.strip()
-                # Duplicate check
-                if header_pin in used_gpio:
-                    msg = f"Config {path} hardware.gpio pin {header_pin} duplicate keyword {keyword!r} (already {used_gpio[header_pin]!r}), skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                # Registry validation
-                spec = _find_spec(keyword)
-                if spec is None:
-                    msg = f"Config {path} hardware.gpio pin {header_pin} keyword {keyword!r} not registered by any module, skipping (unknown)"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                if "gpio" not in spec.buses:
-                    msg = f"Config {path} hardware.gpio pin {header_pin} keyword {keyword!r} not allowed on gpio (spec buses {spec.buses}), skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                # Also check duplicate keyword usage (same keyword on two pins) – warn but allow? We treat as warning but keep first?
-                # For now allow duplicate keyword on multiple pins? But spec says one keyword per pin, duplicate keyword on different pins likely mistake – warn and keep both?
-                # Check if keyword already used elsewhere
-                # We allow but warn
-                for existing in result.gpio:
-                    if existing.keyword == keyword:
-                        logger.warning(
-                            "Config %s hardware.gpio keyword %r used on multiple pins (%d and %d)",
-                            path,
-                            keyword,
-                            existing.header_pin,
-                            header_pin,
-                        )
-                        break
-                used_gpio[header_pin] = keyword
-                result.gpio.append(
-                    GpioAssignment(
-                        header_pin=header_pin, bcm=bcm, keyword=keyword, spec=spec
-                    )
-                )
-
-    # ---- mcp23017: address -> {pin_name: keyword} ----
-    mcp_raw = raw.get("mcp23017") or raw.get("mcp")  # allow both
-    if mcp_raw is not None:
-        if not isinstance(mcp_raw, dict):
-            msg = f"Config {path} hardware.mcp23017 is not a mapping, ignoring"
-            logger.warning(msg)
-            result.warnings.append(msg)
-        else:
-            for addr_k, pins_v in mcp_raw.items():
-                # Parse address 0x20 or 32
-                try:
-                    addr_str = str(addr_k).strip()
-                    address = int(addr_str, 0)  # auto base
-                except ValueError:
-                    msg = f"Config {path} hardware.mcp23017 key {addr_k!r} not a valid address, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                if not 0x20 <= address <= 0x27:
-                    msg = f"Config {path} hardware.mcp23017 address {addr_k!r} ({hex(address)}) out of range 0x20..0x27, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                if not isinstance(pins_v, dict):
-                    msg = f"Config {path} hardware.mcp23017 {hex(address)} value is not a mapping, skipping"
-                    logger.warning(msg)
-                    result.warnings.append(msg)
-                    continue
-                for pin_name_raw, keyword_raw in pins_v.items():
-                    pin_name = str(pin_name_raw).strip()
-                    pin_idx = _parse_mcp_pin(pin_name)
-                    if pin_idx is None:
-                        msg = f"Config {path} hardware.mcp23017 {hex(address)} pin {pin_name!r} invalid (expect GPA0..GPB7), skipping"
-                        logger.warning(msg)
-                        result.warnings.append(msg)
-                        continue
-                    # Normalize pin_name to uppercase GPAx
-                    pin_name = pin_name.upper()
-                    if pin_name not in (
-                        "GPA0",
-                        "GPA1",
-                        "GPA2",
-                        "GPA3",
-                        "GPA4",
-                        "GPA5",
-                        "GPA6",
-                        "GPA7",
-                        "GPB0",
-                        "GPB1",
-                        "GPB2",
-                        "GPB3",
-                        "GPB4",
-                        "GPB5",
-                        "GPB6",
-                        "GPB7",
-                    ):
-                        # _parse already validated, but normalize
-                        pass
-                    if not isinstance(keyword_raw, str) or not keyword_raw.strip():
-                        msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword_raw!r} invalid, skipping"
-                        logger.warning(msg)
-                        result.warnings.append(msg)
-                        continue
-                    keyword = keyword_raw.strip()
-                    # Duplicate mcp pin
-                    key = (address, pin_name)
-                    if key in used_mcp:
-                        msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} duplicate, skipping"
-                        logger.warning(msg)
-                        result.warnings.append(msg)
-                        continue
-                    spec = _find_spec(keyword)
-                    if spec is None:
-                        msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword!r} not registered, skipping"
-                        logger.warning(msg)
-                        result.warnings.append(msg)
-                        continue
-                    if "mcp" not in spec.buses:
-                        msg = f"Config {path} hardware.mcp23017 {hex(address)} {pin_name} keyword {keyword!r} not allowed on mcp (buses {spec.buses}), skipping"
-                        logger.warning(msg)
-                        result.warnings.append(msg)
-                        continue
-                    used_mcp[key] = keyword
-                    result.mcp.append(
-                        McpAssignment(
-                            address=address,
-                            pin_name=pin_name,
-                            pin_index=pin_idx,
-                            keyword=keyword,
-                            spec=spec,
-                        )
-                    )
-
+    _parse_gpio_section(raw.get("gpio"), path, result, used_gpio)
+    _parse_mcp_section(raw.get("mcp23017") or raw.get("mcp"), path, result, used_mcp)
     return result
 
 
@@ -667,10 +669,10 @@ def load_yaml_config(path: Path | None = None) -> TakpiConfig:
                 lon = float(lon)  # type: ignore[arg-type]
             if alt is not None:
                 alt = float(alt)  # type: ignore[arg-type]
-            if lat is not None and not (-90.0 <= lat <= 90.0):
+            if lat is not None and (-90.0 > lat or lat > 90.0):
                 logger.warning("Config %s location.latitude %s out of range", path, lat)
                 lat = None
-            if lon is not None and not (-180.0 <= lon <= 180.0):
+            if lon is not None and (-180.0 > lon or lon > 180.0):
                 logger.warning(
                     "Config %s location.longitude %s out of range", path, lon
                 )
@@ -800,7 +802,7 @@ class ConfigManager:
         await self.stop()
 
     async def _watch_loop(self) -> None:
-        import asyncio
+        import asyncio  # pylint: disable=import-outside-toplevel
 
         while self._running:
             try:
@@ -808,10 +810,13 @@ class ConfigManager:
                 new_cfg = self.check_and_reload()
                 if new_cfg and self.bus is not None:
                     try:
-                        from dataclasses import dataclass as _dc
 
-                        @_dc(frozen=True)
+                        @dataclass(
+                            frozen=True
+                        )  # pylint: disable=too-few-public-methods
                         class ConfigChanged:
+                            """Internal event for config reload."""
+
                             config: TakpiConfig
                             path: Path
 
