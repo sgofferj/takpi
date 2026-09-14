@@ -644,3 +644,47 @@ class LocationProvider:
             speed if speed is not None else 0.0,
             self._current_interval,
         )
+        # Optionally drive gps_ind LED if configured in hardware (mcp or gpio)
+        try:
+            cfg = self.config_manager.config
+            if cfg is not None:
+                # Check mcp gps_ind
+                mcp_gps = None
+                for a in cfg.hardware.mcp:
+                    if a.keyword in ("gps_ind", "gps_fix"):
+                        mcp_gps = a
+                        break
+                if mcp_gps is not None:
+                    # gpsd source with good fix → LED on, else off/blink
+                    # Use LedCommand for MCP
+                    from takpi_common.mcp23017.io import LedCommand  # type: ignore
+
+                    led_state = source == "gpsd" and (
+                        accuracy is None or accuracy < 10.0
+                    )
+                    # For config source, indicate with blink if needed
+                    blink = None
+                    if source == "config":
+                        # Config location has no fix, blink slowly to indicate fallback
+                        blink = 1000 if led_state else None
+                        led_state = True  # keep on but blink
+                    await self.bus.publish(
+                        LedCommand(
+                            id=mcp_gps.keyword,
+                            device_addr=mcp_gps.address,
+                            pin=mcp_gps.pin_index,
+                            state=led_state,
+                            blink_ms=blink,
+                        )
+                    )
+                # For gpio gps_ind, could publish GpioLedCommand in future – currently log only
+                for g in cfg.hardware.gpio:
+                    if g.keyword in ("gps_ind", "gps_fix"):
+                        logger.debug(
+                            "GPIO gps_ind on header %d (BCM %d) would be %s",
+                            g.header_pin,
+                            g.bcm,
+                            "on" if source == "gpsd" else "off",
+                        )
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass

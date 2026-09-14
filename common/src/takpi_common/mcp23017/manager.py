@@ -45,6 +45,15 @@ from takpi_common.mcp23017.io import (
 logger = logging.getLogger(__name__)
 
 
+def _encoder_base(keyword: str) -> str:
+    """Strip _a/_b/_btn suffix for encoder grouping, e.g. enc_main_a → enc_main"""
+    for suf in ("_a", "_b", "_btn"):
+        if keyword.endswith(suf):
+            return keyword[: -len(suf)]
+    # also handle enc_ prefix without suffix? fallback whole
+    return keyword
+
+
 @dataclass(frozen=True)
 class HardwareConfig:
     """Declarative wiring for a daisy-chained MCP23017 chain."""
@@ -59,6 +68,150 @@ class HardwareConfig:
     interrupt_gpio: int | None = None  # BCM pin wired to MCP INT (future)
     # Optional: bus instance injection for tests
     smbus: object | None = None  # FakeSMBus or smbus2.SMBus
+
+    @classmethod
+    def from_takpi_config(
+        cls,
+        takpi_cfg: Any,
+        *,
+        i2c_bus: int = 1,
+        poll_interval_ms: int = 5,
+        smbus: Any | None = None,
+    ) -> HardwareConfig:
+        """Build HardwareConfig from central ``TakpiConfig`` hardware section.
+
+        Only valid entries (already validated by ConfigManager) are used.
+        Missing hardware section → empty config (disabled, per spec).
+        Encoder grouping: keywords ``enc_foo_a``/``enc_foo_b``/``enc_foo_btn`` on same
+        address are grouped into one ``EncoderConfig`` (id=enc_foo).
+        """
+        # Avoid circular import at runtime
+        hw = getattr(takpi_cfg, "hardware", None)
+        if hw is None:
+            return cls(
+                i2c_bus=i2c_bus,
+                devices=[],
+                buttons=[],
+                encoders=[],
+                leds=[],
+                poll_interval_ms=poll_interval_ms,
+                smbus=smbus,
+            )
+        mcp_list = getattr(hw, "mcp", []) or []
+        if not mcp_list:
+            return cls(
+                i2c_bus=i2c_bus,
+                devices=[],
+                buttons=[],
+                encoders=[],
+                leds=[],
+                poll_interval_ms=poll_interval_ms,
+                smbus=smbus,
+            )
+
+        from collections import defaultdict
+
+        # Collect devices
+        devices_set = {a.address for a in mcp_list}
+        devices = sorted(devices_set)
+
+        buttons: list[ButtonConfig] = []
+        leds: list[LedConfig] = []
+        # Encoder grouping: (address, base) -> dict
+        enc_groups: dict[tuple[int, str], dict[str, Any]] = defaultdict(dict)
+
+        for a in mcp_list:
+            spec = getattr(a, "spec", None)
+            spec_type = getattr(spec, "type", "generic") if spec else "generic"
+            keyword = a.keyword
+            # Normalize type inference if generic
+            # Use spec_type if not generic, else infer from keyword
+            inferred = spec_type
+            if inferred == "generic":
+                lk = keyword.lower()
+                if (
+                    lk.startswith("btn_")
+                    or lk == "wipe"
+                    or lk.endswith("_btn")
+                    and "enc_" not in lk
+                ):
+                    inferred = "button"
+                elif lk.startswith("led_") or lk.endswith("_ind"):
+                    inferred = "led"
+                elif lk.startswith("enc_"):
+                    # will be handled as encoder grouping
+                    inferred = "encoder"
+                else:
+                    # Fallback: treat as led for *_ind, else button? Safer as button for inputs
+                    inferred = "button"
+
+            if inferred == "button":
+                buttons.append(
+                    ButtonConfig(id=keyword, device_addr=a.address, pin=a.pin_index)
+                )
+            elif inferred == "led":
+                leds.append(
+                    LedConfig(id=keyword, device_addr=a.address, pin=a.pin_index)
+                )
+            elif inferred in ("encoder_a", "encoder_b", "encoder_btn", "encoder"):
+                # Determine base and subtype
+                base = _encoder_base(keyword)
+                grp_key = (a.address, base)
+                grp = enc_groups[grp_key]
+                # store address for later (should be same for group)
+                grp["address"] = a.address
+                grp["id"] = base
+                if inferred == "encoder_a" or keyword.endswith("_a"):
+                    grp["pin_a"] = a.pin_index
+                elif inferred == "encoder_b" or keyword.endswith("_b"):
+                    grp["pin_b"] = a.pin_index
+                elif inferred == "encoder_btn" or keyword.endswith("_btn"):
+                    grp["pin_button"] = a.pin_index
+                else:
+                    # Generic encoder without suffix – try to assign a/b in order
+                    if "pin_a" not in grp:
+                        grp["pin_a"] = a.pin_index
+                    elif "pin_b" not in grp:
+                        grp["pin_b"] = a.pin_index
+            else:
+                # Unknown type – treat as button if input-like, else led
+                logger.warning(
+                    "Unknown hardware spec type %r for keyword %r, treating as button",
+                    inferred,
+                    keyword,
+                )
+                buttons.append(
+                    ButtonConfig(id=keyword, device_addr=a.address, pin=a.pin_index)
+                )
+
+        encoders: list[EncoderConfig] = []
+        for (addr, base), grp in enc_groups.items():
+            if "pin_a" in grp and "pin_b" in grp:
+                encoders.append(
+                    EncoderConfig(
+                        id=base,
+                        device_addr=addr,
+                        pin_a=grp["pin_a"],
+                        pin_b=grp["pin_b"],
+                        pin_button=grp.get("pin_button"),
+                    )
+                )
+            else:
+                logger.warning(
+                    "Encoder group %r on %s incomplete (need pin_a+pin_b), skipping",
+                    base,
+                    hex(addr),
+                )
+
+        return cls(
+            i2c_bus=i2c_bus,
+            devices=devices,
+            buttons=buttons,
+            encoders=encoders,
+            leds=leds,
+            poll_interval_ms=poll_interval_ms,
+            smbus=smbus,
+        )
 
 
 class HardwareManager:

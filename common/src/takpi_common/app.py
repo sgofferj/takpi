@@ -14,6 +14,7 @@ tested against a local takserver or with a fake stream.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -55,22 +56,69 @@ class TakPiApp:
 
     def __init__(
         self,
-        hardware_cfg: HardwareConfig,
+        hardware_cfg: HardwareConfig | None = None,
         cot_cfg: CotConfig | None = None,
         bus: EventBus | None = None,
+        takpi_config: Any | None = None,
+        smbus: Any | None = None,
     ) -> None:
         self.bus = bus or EventBus()
+        # Build hardware_cfg from central TakpiConfig if provided (hardware: gpio/mcp23017)
+        if takpi_config is not None:
+            try:
+                # HardwareConfig.from_takpi_config handles missing hardware as disabled
+                hardware_cfg = HardwareConfig.from_takpi_config(takpi_config, smbus=smbus)  # type: ignore[attr-defined]
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning(
+                    "Failed to build HardwareConfig from TakpiConfig: %s", exc
+                )
+                hardware_cfg = HardwareConfig(
+                    devices=[], buttons=[], encoders=[], leds=[], smbus=smbus
+                )
+        if hardware_cfg is None:
+            # No hardware configured → disabled (per spec)
+            hardware_cfg = HardwareConfig(devices=[], buttons=[], encoders=[], leds=[])
         self.hardware_cfg = hardware_cfg
         self.cot_cfg = cot_cfg
         self.hardware: HardwareManager | None = None
         self.cot_bus: CotBus | None = None
         self._stream: Any | None = None
         self._subs: list[Any] = []
+        self.takpi_config = takpi_config
+
+    @classmethod
+    def from_config_file(
+        cls,
+        path: str | pathlib.Path | None = None,
+        cot_cfg: CotConfig | None = None,
+        bus: EventBus | None = None,
+        smbus: Any | None = None,
+    ) -> TakPiApp:
+        """Create TakPiApp from central YAML config file (hardware + location)."""
+        import pathlib as _pl
+
+        from takpi_common.config_manager import load_yaml_config
+
+        cfg_path = _pl.Path(path).expanduser() if path else None
+        takpi_cfg = load_yaml_config(cfg_path)
+        return cls(
+            hardware_cfg=None,
+            cot_cfg=cot_cfg,
+            bus=bus,
+            takpi_config=takpi_cfg,
+            smbus=smbus,
+        )
 
     async def start(self) -> None:
-        # Hardware
-        self.hardware = HardwareManager(self.hardware_cfg, self.bus)
-        await self.hardware.start()
+        # Hardware – only start if devices configured (per spec: missing → disabled)
+        if self.hardware_cfg.devices:
+            self.hardware = HardwareManager(self.hardware_cfg, self.bus)
+            await self.hardware.start()
+        else:
+            logger.info(
+                "No MCP hardware configured (hardware.mcp23017 empty), skipping HardwareManager"
+            )
+            self.hardware = None
 
         # Subscribe hardware → main handlers
         self._subs.append(self.bus.subscribe(ButtonEvent, self._on_button))

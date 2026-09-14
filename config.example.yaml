@@ -1,14 +1,30 @@
 # takpi central config – YAML
-# Default path: ~/takpi/config.yaml (or $TAKPI_CONFIG)
-# This file is polled for changes (jitter + mtime watcher).
+# Default path: ~/takpi/config.yaml (or $TAKPI_CONFIG, fallback /etc/takpi/config.yaml)
+# Polled for mtime changes (location + hardware). Use header pin numbers (1..40).
 
 location:
-  # WGS84 decimal degrees – used when gpsd not available
   latitude: 60.1699   # Helsinki
   longitude: 24.9384
   # altitude: 10  # optional, meters
 
-# future: other bridges can add sections here
-# tak:
-#   callsign: TAKPI-01
-#   team: Cyan
+# Hardware – header pins (1..40) + MCP23017 GPA/B. Keywords are registered by modules.
+# Missing hardware section → disabled (per spec). Offending entries are skipped with warning.
+hardware:
+  gpio:  # header pin → keyword (BCM translated internally via HEADER_TO_BCM)
+    8: gauge_tx      # tak-bridge-chronometer TX (header 8 → BCM14, /dev/serial0)
+    10: gauge_rx     # header 10 → BCM15
+    13: escpos_tx    # tak-bridge-escpos softserial TX (header 13 → BCM27)
+    15: escpos_rx    # header 15 → BCM22 (optional RX)
+    18: wipe         # button (header 18 → BCM24)
+    36: gps_ind      # LED indicator (header 36 → BCM16) – also on MCP for fallback
+
+  mcp23017:  # 0x20..0x27 → GPA0..GPB7 → keyword
+    0x20:  # A0=GND
+      GPA0: btn_wipe
+      GPA1: gps_ind
+      GPB0: enc_main_a
+      GPB1: enc_main_b
+      GPB2: enc_main_btn
+    0x21:  # A0=VCC
+      GPA0: led_alert
+      GPA1: led_gps

@@ -40,6 +40,42 @@ def _report(ok: bool) -> None:
 
 
 def _printer_from_env() -> EscPosPrinter:
+    # Try central hardware config first (header pins → BCM, per spec)
+    # Transparently falls back to env if not configured
+    try:
+        from takpi_common.config_manager import header_to_bcm, load_yaml_config
+
+        cfg = load_yaml_config()
+        # Check hardware.gpio for escpos_tx/rx keywords (header numbers)
+        tx_header = None
+        rx_header = None
+        for assignment in cfg.hardware.gpio:
+            if assignment.keyword == "escpos_tx":
+                tx_header = assignment.header_pin
+            elif assignment.keyword == "escpos_rx":
+                rx_header = assignment.header_pin
+        tx_from_cfg = header_to_bcm(tx_header) if tx_header is not None else None
+        rx_from_cfg = header_to_bcm(rx_header) if rx_header is not None else None
+        if tx_from_cfg is not None:
+            baud = int(
+                os.getenv("ESCPOS_BAUDRATE", os.getenv("PRINTER_BAUDRATE", "9600"))
+            )
+            encoding = os.getenv("ESCPOS_ENCODING", "cp437")
+            logger.info(
+                "ESCPOS softserial from config.yaml header TX %d→BCM %d RX %s @%d",
+                tx_header,
+                tx_from_cfg,
+                str(rx_from_cfg),
+                baud,
+            )
+            return EscPosPrinter(
+                tx_pin=tx_from_cfg, rx_pin=rx_from_cfg, baudrate=baud, encoding=encoding
+            )
+        if tx_from_cfg is None and rx_from_cfg is not None:
+            logger.warning("Config has escpos_rx without escpos_tx, ignoring")
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("Hardware config escpos lookup failed (fallback to env): %s", exc)
+
     port = os.getenv("ESCPOS_PORT") or os.getenv("PRINTER_PORT")
     baud = int(os.getenv("ESCPOS_BAUDRATE", os.getenv("PRINTER_BAUDRATE", "9600")))
     tx_raw = os.getenv("ESCPOS_TX_PIN") or os.getenv("PRINTER_TX_PIN")
