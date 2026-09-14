@@ -107,11 +107,9 @@ class TakPiApp:
         smbus: Any | None = None,
     ) -> TakPiApp:
         """Create TakPiApp from central YAML config file (hardware + location)."""
-        import pathlib as _pl
-
         from takpi_common.config_manager import load_yaml_config
 
-        cfg_path = _pl.Path(path).expanduser() if path else None
+        cfg_path = pathlib.Path(path).expanduser() if path else None
         takpi_cfg = load_yaml_config(cfg_path)
         return cls(
             hardware_cfg=None,

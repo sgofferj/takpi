@@ -1,3 +1,4 @@
+# pylint: disable=too-many-nested-blocks,too-many-branches
 """Wipe module – secure delete of sensitive data on long button press.
 
 Recommended: put the wipe button directly on a GPIO header pin (e.g. header
@@ -44,7 +45,7 @@ import subprocess  # nosec B404
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ClassVar
 
 from takpi_common.bus import EventBus
 from takpi_common.mcp23017.io import ButtonEvent
@@ -66,12 +67,12 @@ class SensitivePath:
 class WipeRegistry:
     """Global registry for sensitive paths and config keys."""
 
-    _paths: list[SensitivePath] = field(default_factory=list)  # type: ignore
-    _config_keys: list[str] = field(default_factory=list)  # type: ignore
+    _paths: list[SensitivePath] = field(default_factory=list)
+    _config_keys: list[str] = field(default_factory=list)
 
     # Class-level singletons (avoid multiple instances)
-    _global_paths: list[SensitivePath] = []  # type: ignore
-    _global_config_keys: list[str] = []  # type: ignore
+    _global_paths: ClassVar[list[SensitivePath]] = []  # type: ignore
+    _global_config_keys: ClassVar[list[str]] = []  # type: ignore
 
     @classmethod
     def register_path(
@@ -152,7 +153,7 @@ def _secure_overwrite_file(path: Path, passes: int = 1) -> bool:
         size = path.stat().st_size
         # Overwrite
         try:
-            with open(path, "r+b") as f:
+            with open(path, "r+b") as f:  # pylint: disable=unspecified-encoding
                 for _ in range(passes):
                     f.seek(0)
                     # Write zeros
@@ -184,7 +185,9 @@ def _secure_overwrite_file(path: Path, passes: int = 1) -> bool:
         return False
 
 
-def _wipe_path(pattern: Path, base_dir: Path | None = None) -> int:
+def _wipe_path(
+    pattern: Path, base_dir: Path | None = None
+) -> int:  # pylint: disable=too-many-nested-blocks,too-many-branches
     """Wipe files matching pattern (glob) with overwrite. Return count."""
     count = 0
     # Resolve base
@@ -422,6 +425,12 @@ class WipeManager:
                     break
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.debug("WipeManager GPIO check failed: %s", exc)
+        # Wipe available LED – on if button defined (header preferred)
+        try:
+            await self._set_wipe_led("led_wipe_avail", "LED_WIPE_AVAIL", state=True)
+            await self._set_wipe_led("LED_WIPE_AVAIL", "LED_WIPE_AVAIL", state=True)
+        except Exception:
+            pass
         logger.info(
             "WipeManager started (button %s, hold %.0fs, config %s)",
             self.BUTTON_IDS,
@@ -449,6 +458,12 @@ class WipeManager:
             except asyncio.CancelledError:
                 pass
             self._gpio_task = None
+        # Turn off wipe LEDs
+        try:
+            await self._set_wipe_led("led_wipe_avail", "LED_WIPE_AVAIL", state=False)
+            await self._set_wipe_led("led_wipe_trig", "LED_WIPE_TRIG", state=False)
+        except Exception:
+            pass
 
     async def __aenter__(self) -> WipeManager:
         await self.start()
@@ -456,6 +471,54 @@ class WipeManager:
 
     async def __aexit__(self, *args: object) -> None:
         await self.stop()
+
+    async def _set_wipe_led(
+        self, *keywords: str, state: bool, blink_ms: int | None = None
+    ) -> None:
+        """Set wipe LEDs (LED_WIPE_AVAIL / LED_WIPE_TRIG) if configured."""
+        try:
+            from takpi_common.config_manager import load_yaml_config
+            from takpi_common.mcp23017.io import LedCommand  # type: ignore
+
+            cfg = load_yaml_config(self.config_path)
+            for kw in keywords:
+                # Try MCP first, then GPIO
+                mcp_pin = None
+                gpio_pin = None
+                for ma in cfg.hardware.mcp:
+                    if ma.keyword == kw:
+                        mcp_pin = ma
+                        break
+                for ga in cfg.hardware.gpio:
+                    if ga.keyword == kw:
+                        gpio_pin = ga
+                        break
+                # Prefer MCP for LedCommand (HardwareManager handles it)
+                target = mcp_pin or gpio_pin
+                if target is not None:
+                    if mcp_pin is not None:
+                        await self.bus.publish(
+                            LedCommand(
+                                id=kw.lower(),
+                                device_addr=mcp_pin.address,
+                                pin=mcp_pin.pin_index,
+                                state=state,
+                                blink_ms=blink_ms,
+                            )
+                        )
+                    elif gpio_pin is not None:
+                        await self.bus.publish(
+                            LedCommand(
+                                id=kw.lower(),
+                                device_addr=0,
+                                pin=gpio_pin.header_pin,
+                                state=state,
+                                blink_ms=blink_ms,
+                            )
+                        )
+                    logger.debug("Wipe LED %s -> %s", kw, "on" if state else "off")
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.debug("Wipe LED failed: %s", exc)
 
     async def _on_button(self, evt: ButtonEvent) -> None:
         if evt.id not in self.BUTTON_IDS:
@@ -490,7 +553,7 @@ class WipeManager:
         use_rpi = False
         use_gpiozero = False
         try:
-            import RPi.GPIO as GPIO  # type: ignore
+            from RPi import GPIO  # type: ignore
 
             GPIO.setmode(GPIO.BOARD)
             GPIO.setup(header_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
@@ -519,7 +582,7 @@ class WipeManager:
             try:
                 if use_rpi:
                     # RPi.GPIO BOARD mode: header pin number directly
-                    import RPi.GPIO as GPIO  # type: ignore
+                    from RPi import GPIO  # type: ignore
 
                     level = GPIO.input(header_pin)
                     # Active-low: 0 = pressed
@@ -538,7 +601,9 @@ class WipeManager:
                     # Try /sys/class/gpio
                     try:
                         val = (
-                            Path(f"/sys/class/gpio/gpio{bcm}/value").read_text().strip()
+                            Path(f"/sys/class/gpio/gpio{bcm}/value")
+                            .read_text(encoding="utf-8")
+                            .strip()
                         )
                         is_pressed = val == "0"
                     except (OSError, FileNotFoundError):
@@ -574,6 +639,11 @@ class WipeManager:
 
     async def _execute_wipe(self) -> None:
         """Execute wipe of all registered sensitive data, then poweroff."""
+        # Wipe triggered LED – on during wipe
+        try:
+            await self._set_wipe_led("led_wipe_trig", "LED_WIPE_TRIG", state=True)
+        except Exception:
+            pass
         logger.warning("WIPE START – wiping sensitive data")
         if self.dry_run:
             logger.info("WIPE dry_run – would wipe but skipping actual delete/poweroff")

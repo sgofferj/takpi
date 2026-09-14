@@ -301,6 +301,42 @@ register_hardware_keyword(
         description="GPS fix indicator",
     ),
 )
+register_hardware_keyword(
+    "led_wipe_avail",
+    HardwareSpec(
+        buses=("gpio", "mcp"),
+        type="led",
+        module="wipe",
+        description="Wipe available indicator (on when wipe ready)",
+    ),
+)
+register_hardware_keyword(
+    "led_wipe_trig",
+    HardwareSpec(
+        buses=("gpio", "mcp"),
+        type="led",
+        module="wipe",
+        description="Wipe triggered indicator (on during wipe, off on poweroff)",
+    ),
+)
+register_hardware_keyword(
+    "LED_WIPE_AVAIL",
+    HardwareSpec(
+        buses=("gpio", "mcp"),
+        type="led",
+        module="wipe",
+        description="Wipe available (alias)",
+    ),
+)
+register_hardware_keyword(
+    "LED_WIPE_TRIG",
+    HardwareSpec(
+        buses=("gpio", "mcp"),
+        type="led",
+        module="wipe",
+        description="Wipe triggered (alias)",
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
