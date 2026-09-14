@@ -177,10 +177,12 @@ def _find_spec(keyword: str) -> HardwareSpec | None:
 
 
 def is_keyword_registered(keyword: str) -> bool:
+    """Return True if keyword is registered (exact or wildcard)."""
     return _find_spec(keyword) is not None
 
 
 def get_registered_keywords() -> dict[str, HardwareSpec]:
+    """Return copy of hardware registry."""
     return dict(_HARDWARE_REGISTRY)
 
 
